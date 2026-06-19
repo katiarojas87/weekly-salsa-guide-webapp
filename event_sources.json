@@ -1,0 +1,12 @@
+[
+  {
+    "name": "Custom salsa event pages",
+    "type": "generic",
+    "source_tag": "Generic",
+    "urls": [
+      "https://example.com/salsa-events",
+      "https://example.com/dance-promoter"
+    ],
+    "description": "Add public pages that expose event schema (JSON-LD) or event links."
+  }
+]

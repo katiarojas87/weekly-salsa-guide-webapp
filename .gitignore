@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+raw_events_*.json
+latinworld_raw_*.json
+salsalovers_raw_*.json
+*.tar.gz

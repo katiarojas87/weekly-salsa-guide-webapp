@@ -6,7 +6,14 @@ This repository shows nearby salsa events, classes, and congresses based on the 
 
 The project scrapes weekly event data, stores normalized events in SQLite, and serves a FastAPI API that filters active events live by distance.
 
-## Main files
+## What it does
+
+- Scrapes upcoming salsa events from active source websites.
+- Normalizes event data.
+- Persists events to SQLite.
+- Serves event search through a FastAPI API.
+
+## Important files
 
 | File | Purpose |
 |---|---|
@@ -15,6 +22,8 @@ The project scrapes weekly event data, stores normalized events in SQLite, and s
 | `api.py` | FastAPI API with health, scheduler, and `/events` endpoint |
 | `db.py` | SQLite schema and persistence helpers |
 | `scrapers/` | Source-specific scrapers and utilities |
+| `manual_events.json` | Fallback/manual event data |
+| `event_sources.json` | Generic event source list |
 | `requirements.txt` | Python dependencies |
 
 ## Setup
@@ -24,7 +33,7 @@ pip install -r requirements.txt
 playwright install chromium
 ```
 
-## Run locally
+## Commands
 
 ```bash
 python run_pipeline.py
@@ -34,8 +43,8 @@ uvicorn api:app --host 0.0.0.0 --port 8000
 ## API
 
 - `GET /health` — liveness check
-- `GET /events?lat=...&lng=...&radius_km=...` — returns active events within range, sorted by computed distance
 - `POST /scrape` — manual admin trigger for the weekly scrape pipeline
+- `GET /events?lat=...&lng=...&radius_km=...` — returns active events within range, sorted by computed distance
 
 ## Scheduling
 

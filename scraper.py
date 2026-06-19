@@ -5,20 +5,19 @@ scraper.py
 Main coordinator. Runs both scrapers and combines results.
 
 Uses:
-  - salsalovers_scraper.py  → scrapes agenda.salsalovers.be
-  - latinworld_scraper.py   → scrapes latinworld.nl
+  - scrapers.salsalovers  → scrapes agenda.salsalovers.be
+  - scrapers.latinworld   → scrapes latinworld.nl
 
 - Automatically targets next Monday → Sunday.
 - One-time guard: skips if this week's raw_events file already exists.
 - Auto-deletes previous week's raw JSON files on success.
 
 Saves: raw_events_YYYY-MM-DD.json
-Next step: run scorer.py (or POST to /score via api.py)
+Next step: run the backend or use `run_pipeline.py` to persist events to SQLite.
 
 Run:
   python scraper.py
 """
-
 import asyncio
 import glob
 import json
@@ -26,8 +25,9 @@ import os
 import sys
 from datetime import date, timedelta, datetime
 
-from salsalovers_scraper import scrape_salsalovers
-from latinworld_scraper import scrape_latinworld
+from scrapers import scrape_salsalovers, scrape_latinworld
+from scrapers.event_sources import scrape_generic_sources, load_manual_events
+from db import init_db, save_events, deactivate_past_events
 
 NL_DAYS = {4: "Vrijdag", 5: "Zaterdag", 6: "Zondag",
            0: "Maandag", 1: "Dinsdag", 2: "Woensdag", 3: "Donderdag"}
@@ -77,17 +77,45 @@ async def main():
         print(f"\n✅ Already scraped this week ({out_file}). Nothing to do.")
         sys.exit(0)
 
-    # ── Run both scrapers ─────────────────────────────────────────────────────
-    salsa_events = await scrape_salsalovers(target_dates)
-    latin_events = await scrape_latinworld(target_dates)
+    # ── Run all scrapers ──────────────────────────────────────────────────────
+    source_runs = [
+        ("SalsaLovers", scrape_salsalovers, True),
+        ("LatinWorld", scrape_latinworld, True),
+        ("EventSources", scrape_generic_sources, False),
+        ("ManualEvents", lambda dates: load_manual_events("manual_events.json", dates), False),
+    ]
+    results = {}
 
-    all_events = salsa_events + latin_events
+    for name, func, is_async in source_runs:
+        try:
+            print(f"  🌐 Running {name} ...")
+            events = await func(target_dates) if is_async else func(target_dates)
+            results[name] = events or []
+            print(f"     → {len(results[name])} events")
+        except Exception as exc:
+            print(f"  ⚠️  {name} failed: {exc}")
+            results[name] = []
+
+    all_events = []
+    for events in results.values():
+        all_events.extend(events)
+
     print(f"\n📋 Total: {len(all_events)} events "
-          f"(SalsaLovers: {len(salsa_events)}, LatinWorld: {len(latin_events)})")
+          f"(SalsaLovers: {len(results['SalsaLovers'])}, LatinWorld: {len(results['LatinWorld'])}, "
+          f"EventSources: {len(results['EventSources'])}, manual: {len(results['ManualEvents'])})")
 
     if not all_events:
         print("\n❌ No events found for this week.")
         sys.exit(0)
+
+    init_db(None)
+    cutoff_date = target_dates[0]
+    deactivated = deactivate_past_events(None, cutoff_date)
+    if deactivated:
+        print(f"\n🗄️  Deactivated {deactivated} past event(s) before saving new data")
+
+    saved = save_events(None, all_events)
+    print(f"\n💾 Saved {saved} events to SQLite database")
 
     # ── Group by date ─────────────────────────────────────────────────────────
     days = {}
@@ -121,7 +149,7 @@ async def main():
     # ── Auto-delete previous week's files ─────────────────────────────────────
     delete_old_raw_files(keep_start=start_date)
 
-    print(f"\n✅ Done! Now run: python scorer.py {out_file}")
+    print(f"\n✅ Done! Raw events saved to {out_file}. Use `run_pipeline.py` or the API to persist and query events.")
 
 
 if __name__ == "__main__":

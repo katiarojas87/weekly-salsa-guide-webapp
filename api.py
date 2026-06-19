@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
 """
-api.py — FastAPI server for n8n integration
-Exposes scraper.py and scorer.py as HTTP endpoints
+api.py — FastAPI server for the Salsa Events backend
+Exposes scraping and event query endpoints
 
 Run:  uvicorn api:app --host 0.0.0.0 --port 8000
 """
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-import asyncio, glob, json, os, re
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+import asyncio, glob, json, os
 from datetime import datetime, date, timedelta
-from pathlib import Path
-import anthropic
 
-# Import your existing scrapers
-from salsalovers_scraper import scrape_salsalovers
-from latinworld_scraper import scrape_latinworld
-from scorer import score_events
+# Import your existing scrapers and DB helpers
+from scrapers import scrape_salsalovers, scrape_latinworld
+from scrapers.event_sources import scrape_generic_sources, load_manual_events
+from db import init_db, save_events, deactivate_past_events, get_events
 
 app = FastAPI(title="Salsa Events API", version="1.0")
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def get_next_week_dates():
@@ -30,6 +33,33 @@ def get_next_week_dates():
     days_ahead = (7 - today.weekday()) % 7 or 7
     next_monday = today + timedelta(days=days_ahead)
     return [next_monday + timedelta(days=i) for i in range(7)]
+
+
+def haversine_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    from math import radians, sin, cos, sqrt, atan2
+    r = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlng = radians(lng2 - lng1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    c = 2 * atan2(sqrt(a), sqrt(1 - a))
+    return r * c
+
+
+def filter_events(events: list, city: str | None = None, lat: float | None = None,
+                  lng: float | None = None, radius_km: float | None = None) -> list:
+    filtered = []
+    for event in events:
+        if city:
+            if city.lower() not in str(event.get("city", "")).lower():
+                continue
+        if lat is not None and lng is not None and radius_km is not None:
+            if event.get("lat") is None or event.get("lng") is None:
+                continue
+            dist = haversine_distance(lat, lng, float(event["lat"]), float(event["lng"]))
+            if dist > radius_km:
+                continue
+        filtered.append(event)
+    return filtered
 
 
 def delete_old_raw_files(keep_start: date):
@@ -68,7 +98,9 @@ async def scrape():
 
         salsa = await scrape_salsalovers(target_dates)
         latin = await scrape_latinworld(target_dates)
-        all_events = salsa + latin
+        generic = scrape_generic_sources(target_dates)
+        manual = load_manual_events("manual_events.json", target_dates)
+        all_events = salsa + latin + generic + manual
 
         NL_DAYS = {4:"Vrijdag",5:"Zaterdag",6:"Zondag",
                    0:"Maandag",1:"Dinsdag",2:"Woensdag",3:"Donderdag"}
@@ -94,12 +126,23 @@ async def scrape():
             "total_events": len(all_events),
             "salsalovers_count": len(salsa),
             "latinworld_count": len(latin),
+            "generic_count": len(generic),
+            "manual_count": len(manual),
             "cached": False,
         }
 
         # ── Save this week's file ─────────────────────────────────────────────
         with open(out_file, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
+
+        # ── Persist data to SQLite and prune old events ─────────────────────────
+        init_db(None)
+        cutoff_date = target_dates[0]
+        deactivated = deactivate_past_events(None, cutoff_date)
+        if deactivated:
+            print(f"  🗄️  Deactivated {deactivated} past event(s) before saving new data")
+        saved = save_events(None, salsa + latin + generic + manual)
+        print(f"  💾 Saved {saved} events to SQLite database")
 
         # ── Delete previous week's files ──────────────────────────────────────
         delete_old_raw_files(keep_start=start_date)
@@ -108,17 +151,29 @@ async def scrape():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# ── SCORE ENDPOINT ───────────────────────────────────────────────────────
-@app.post("/score")
-async def score(raw: dict):
-    """Receive raw events JSON, call Claude, return ranked top events per day."""
-    if not ANTHROPIC_API_KEY:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
 
+# ── EVENTS ENDPOINT ──────────────────────────────────────────────────────
+@app.get("/events")
+async def events(
+    date: str | None = Query(None, description="Filter by event date, e.g. 2026-06-19"),
+    city: str | None = Query(None, description="Filter by event city or partial city name"),
+    lat: float | None = Query(None, description="Latitude for live distance filtering"),
+    lng: float | None = Query(None, description="Longitude for live distance filtering"),
+    radius_km: float | None = Query(None, description="Radius in kilometers for live distance filtering"),
+):
     try:
-        result = score_events(raw, api_key=ANTHROPIC_API_KEY)
-        return result
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Claude returned invalid JSON: {e}")
+        events = get_events(None, date_filter=date)
+        filtered = filter_events(events, city=city, lat=lat, lng=lng, radius_km=radius_km)
+        return {
+            "count": len(filtered),
+            "filter": {
+                "date": date,
+                "city": city,
+                "lat": lat,
+                "lng": lng,
+                "radius_km": radius_km,
+            },
+            "events": filtered,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
