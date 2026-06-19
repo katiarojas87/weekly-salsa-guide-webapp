@@ -72,17 +72,17 @@ def km_from_antwerp(city: str) -> float:
     return geodesic(ANTWERP_COORDS, coords).km
 
 def is_within_range(city: str, address: str = "") -> tuple:
-    """Return (in_range: bool, distance_km: float).
+    """Return (in_range: bool, lat: float, lng: float, distance_km: float).
     Distance-authoritative: geocode and measure real km from Antwerp.
-    If geocoding fails, keep the event (True) but mark distance -1 (unknown)."""
+    If geocoding fails, keep the event (True) but mark distance -1 (unknown) with None coords."""
     loc = " ".join(filter(None, [address, city])).strip()
     if not loc:
-        return True, -1.0
+        return True, None, None, -1.0
     coords = geocode(loc) or geocode(city)
     if not coords:
-        return True, -1.0
+        return True, None, None, -1.0
     dist = round(geodesic(ANTWERP_COORDS, coords).km, 1)
-    return dist <= MAX_DISTANCE_KM, dist
+    return dist <= MAX_DISTANCE_KM, coords[0], coords[1], dist
 
 # HTML parsing uses shared `inner_text` from scrapers.utils
 
@@ -157,7 +157,8 @@ def parse_listing(html: str, target_dates: list) -> list:
             "instagram_url": "",
             "is_free":       False,
             "image_url":     "",
-            "_distance_km":  0,
+            "lat":           None,
+            "lng":           None,
         })
 
     print(f"  Found {len(events)} LatinWorld events for target weekend")
@@ -353,12 +354,17 @@ async def scrape_latinworld(target_dates: list) -> list:
     for e in filtered_events:
         city = e.get('city', '')
         address = e.get('address', '')
-        in_range, dist = is_within_range(city, address)
+        in_range, lat, lng, dist = is_within_range(city, address)
         status = "✅" if in_range else "❌"
         dist_str = f"{dist}km" if dist >= 0 else "dist?"
         print(f"  {status} {e['name'][:40]} @ {city} ({dist_str})")
         if in_range:
-            nearby.append({**e, "_distance_km": dist})
+            evt = {**e}
+            evt['lat'] = lat
+            evt['lng'] = lng
+            # Remove internal fields that start with _
+            evt = {k: v for k, v in evt.items() if not k.startswith('_')}
+            nearby.append(evt)
 
     print(f"  → {len(nearby)} LatinWorld events kept")
     return nearby

@@ -36,23 +36,23 @@ NL_DAYS = {4: "Vrijdag", 5: "Zaterdag", 6: "Zondag",
 # Source-specific geocoding and distance helpers remain below.
 
 
-def is_within_range(city: str, address: str = "", coords=None) -> tuple:
-    """Return (in_range: bool, distance_km: float).
-    Distance-authoritative: prefer explicit coords, else geocode the location and
-    measure real km from Antwerp. If geocoding fails, keep the event with dist -1 (unknown)."""
+def get_coordinates_and_distance(city: str, address: str = "", coords=None) -> tuple:
+    """Return (in_range: bool, lat: float, lng: float, distance_km: float).
+    Distance-authoritative: prefer explicit coords, else geocode the location.
+    If geocoding fails, keep the event with dist -1 (unknown) and None for coords."""
     if coords:
         dist = round(geodesic(ANTWERP_COORDS, coords).km, 1)
-        return dist <= MAX_DISTANCE_KM, dist
+        return dist <= MAX_DISTANCE_KM, coords[0], coords[1], dist
 
     loc = " ".join(filter(None, [address, city])).strip()
     if not loc:
-        return True, -1.0
+        return True, None, None, -1.0
 
     gc = geocode(loc) or geocode(city)
     if not gc:
-        return True, -1.0
+        return True, None, None, -1.0
     dist = round(geodesic(ANTWERP_COORDS, gc).km, 1)
-    return dist <= MAX_DISTANCE_KM, dist
+    return dist <= MAX_DISTANCE_KM, gc[0], gc[1], dist
 
 # ─── STEP 1: COLLECT URLS FROM LISTING ───────────────────────────────────────
 
@@ -437,17 +437,21 @@ async def scrape_salsalovers(target_dates: list) -> list:
 
     print(f"  {len(weekend_events)} events match the target range")
 
-    # Filter by distance
+    # Filter by distance and extract lat/lng
     kept = []
     print(f"\n📍 Distance filter (SalsaLovers)...")
     for e in weekend_events:
-        in_range, dist = is_within_range(
+        in_range, lat, lng, dist = get_coordinates_and_distance(
             e.get('city', ''), e.get('address', ''), e.get('coordinates')
         )
         status = "✅" if in_range else "❌"
         print(f"  {status} {e.get('name','?')[:45]} @ {e.get('city','')} → {dist}km")
         if in_range:
-            kept.append({**e, "_distance_km": dist})
+            # Remove internal fields and add lat/lng
+            evt = {k: v for k, v in e.items() if not k.startswith('_') and k != 'coordinates'}
+            evt['lat'] = lat
+            evt['lng'] = lng
+            kept.append(evt)
 
     print(f"  → {len(kept)} SalsaLovers events kept")
     return kept
