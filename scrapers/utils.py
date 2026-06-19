@@ -3,7 +3,6 @@
 import re
 import time
 from datetime import date, datetime
-from pathlib import Path
 
 import requests
 from geopy.geocoders import Nominatim

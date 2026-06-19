@@ -25,7 +25,7 @@ import os
 import sys
 from datetime import date, timedelta, datetime
 
-from scrapers import scrape_salsalovers, scrape_latinworld
+from scrapers import scrape_salsalovers, scrape_latinworld, scrape_salsavida
 from scrapers.event_sources import scrape_generic_sources, load_manual_events
 from db import init_db, save_events, deactivate_past_events
 
@@ -49,6 +49,7 @@ def delete_old_raw_files(keep_start: date):
         "raw_events_*.json",
         "salsalovers_raw_*.json",
         "latinworld_raw_*.json",
+        "salsavida_raw_*.json",
     ]
     keep_prefix = str(keep_start)
     deleted = []
@@ -79,10 +80,11 @@ async def main():
 
     # ── Run all scrapers ──────────────────────────────────────────────────────
     source_runs = [
-        ("SalsaLovers", scrape_salsalovers, True),
-        ("LatinWorld", scrape_latinworld, True),
-        ("EventSources", scrape_generic_sources, False),
-        ("ManualEvents", lambda dates: load_manual_events("manual_events.json", dates), False),
+        ("SalsaLovers",   scrape_salsalovers,  True),
+        ("LatinWorld",    scrape_latinworld,   True),
+        ("SalsaVida",     scrape_salsavida,    False),
+        ("EventSources",  scrape_generic_sources, False),
+        ("ManualEvents",  lambda dates: load_manual_events("manual_events.json", dates), False),
     ]
     results = {}
 
@@ -100,9 +102,8 @@ async def main():
     for events in results.values():
         all_events.extend(events)
 
-    print(f"\n📋 Total: {len(all_events)} events "
-          f"(SalsaLovers: {len(results['SalsaLovers'])}, LatinWorld: {len(results['LatinWorld'])}, "
-          f"EventSources: {len(results['EventSources'])}, manual: {len(results['ManualEvents'])})")
+    summary = ", ".join(f"{name}: {len(evts)}" for name, evts in results.items())
+    print(f"\n📋 Total: {len(all_events)} events ({summary})")
 
     if not all_events:
         print("\n❌ No events found for this week.")

@@ -43,18 +43,6 @@ NL_MONTHS = {
 NL_DAYS = {4: "Vrijdag", 5: "Zaterdag", 6: "Zondag",
            0: "Maandag", 1: "Dinsdag", 2: "Woensdag", 3: "Donderdag"}
 
-# --- DATE HELPERS ---
-
-def get_upcoming_weekend_dates():
-    today   = date.today()
-    weekday = today.weekday()
-    days_to_fri = (4 - weekday) % 7
-    if days_to_fri == 0:
-        days_to_fri = 7
-    friday = today + timedelta(days=days_to_fri)
-    return [friday, friday + timedelta(1), friday + timedelta(2)]
-
-
 # --- GEOCODING ---
 
 # Use shared `geocode`, `inner_text`, and `parse_dutch_date` from `scrapers.utils`.
@@ -255,6 +243,11 @@ def parse_detail(html: str, event: dict) -> dict:
         elif 'land' in label or 'country' in label:
             updated['country'] = value
 
+    for label, value in parsed_rows:
+        if value and ('omschrijving' in label or 'beschrijving' in label or 'description' in label):
+            updated['description'] = value[:300]
+            break
+
     # LatinWorld often puts city/country in blank-label rows after the address row.
     for idx, (label, value) in enumerate(parsed_rows):
         if 'adres' in label or 'address' in label:
@@ -269,9 +262,6 @@ def parse_detail(html: str, event: dict) -> dict:
                         updated['country'] = nv
                         break
             break
-
-        elif 'omschrijving' in label or 'beschrijving' in label or 'description' in label:
-            updated['description'] = value[:300]
 
     if not updated.get('description'):
         div_blocks = re.findall(r'<div[^>]*>([\s\S]*?)</div>', html, re.IGNORECASE)
@@ -321,7 +311,7 @@ BROWSER_CTX = dict(
 async def scrape_latinworld(target_dates: list) -> list:
     from playwright.async_api import async_playwright
 
-    print(f"\n🌐 Loading LatinWorld...")
+    print("\nLoading LatinWorld...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
         ctx     = await browser.new_context(**BROWSER_CTX)
@@ -344,7 +334,7 @@ async def scrape_latinworld(target_dates: list) -> list:
 
         events = parse_listing(html, target_dates)
         if not events:
-            print("  ⚠️  No LatinWorld events found for this weekend")
+            print("  Warning: no LatinWorld events found for this weekend")
             await browser.close()
             return []
 
@@ -354,7 +344,6 @@ async def scrape_latinworld(target_dates: list) -> list:
             async with sem:
                 dp = await ctx.new_page()
                 try:
-                    print(f"  🔍 {event['name'][:50]} ({event['city']})")
                     await dp.goto(event['url'], wait_until="domcontentloaded", timeout=15000)
                     await asyncio.sleep(random.uniform(0.4, 0.9))
                     detail_html = await dp.content()
@@ -396,11 +385,9 @@ async def scrape_latinworld(target_dates: list) -> list:
 
         if is_bachata_only(name):
             excluded_bachata_only += 1
-            print(f"  ⛔ Skipping bachata-only event: {name[:50]}")
             continue
         if is_kizomba_only(name, genres):
             excluded_kizomba_only += 1
-            print(f"  ⛔ Skipping kizomba-only event: {name[:50]}")
             continue
         filtered_events.append(e)
 
@@ -472,8 +459,6 @@ async def main():
     print("\n📊 Summary:")
     for day_data in output["days"]:
         print(f"  {day_data['label']}: {len(day_data['events'])} events")
-        for e in day_data["events"]:
-            print(f"    - {e['name']} @ {e['city']} {e['time']} | {e.get('music_genres','')}")
 
     print("\n✅ Done!")
 

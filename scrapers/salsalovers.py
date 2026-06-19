@@ -399,7 +399,7 @@ async def scrape_salsalovers(target_dates: list) -> list:
 
     target_set = set(str(d) for d in target_dates)
 
-    print(f"\n🌐 Loading SalsaLovers listing...")
+    print("\nLoading SalsaLovers listing...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
         ctx     = await browser.new_context(**BROWSER_CTX)
@@ -467,11 +467,9 @@ async def scrape_salsalovers(target_dates: list) -> list:
 
         if is_bachata_only(name):
             excluded_bachata_only += 1
-            print(f"  ⛔ Skipping bachata-only event: {name[:45]}")
             continue
         if is_kizomba_only(name, description):
             excluded_kizomba_only += 1
-            print(f"  ⛔ Skipping kizomba-only event: {name[:45]}")
             continue
 
         lat, lng = get_coordinates(e.get('city', ''), e.get('address', ''), e.get('coordinates'))
@@ -539,8 +537,6 @@ async def main():
     print("\n📊 Summary:")
     for day_data in output["days"]:
         print(f"  {day_data['label']}: {len(day_data['events'])} events")
-        for e in day_data["events"]:
-            print(f"    - {e['name']} @ {e.get('city','')} {e['time']}")
 
     print("\n✅ Done!")
 
