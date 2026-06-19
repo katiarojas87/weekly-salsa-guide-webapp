@@ -26,12 +26,9 @@ import sys
 import time
 import random
 from datetime import date, timedelta, datetime
-from geopy.distance import geodesic
-from scrapers.utils import geocode, inner_text, parse_dutch_date
+from scrapers.utils import KNOWN_COORDS, inner_text, parse_dutch_date
 
 # --- CONFIG ---
-ANTWERP_COORDS  = (51.2194, 4.4025)
-MAX_DISTANCE_KM = 120
 LATINWORLD_URL  = "https://www.latinworld.nl/salsa/agenda/?periode=1"
 BASE_URL        = "https://www.latinworld.nl/"
 
@@ -61,28 +58,22 @@ def get_upcoming_weekend_dates():
 # --- GEOCODING ---
 
 # Use shared `geocode`, `inner_text`, and `parse_dutch_date` from `scrapers.utils`.
-# Keep source-specific helpers (distance checks) below and call into the shared utils.
+# Keep source-specific helpers (lat/lng enrichment) below and call into the shared utils.
 
-def km_from_antwerp(city: str) -> float:
-    if not city:
-        return 0.0
-    coords = geocode(city)
-    if not coords:
-        return 0.0
-    return geodesic(ANTWERP_COORDS, coords).km
+def lookup_known_coordinates(*parts: str) -> tuple:
+    for part in parts:
+        key = str(part or "").strip().lower()
+        if not key:
+            continue
+        for city_key, coords in KNOWN_COORDS.items():
+            if city_key in key:
+                return coords
+    return None, None
 
-def is_within_range(city: str, address: str = "") -> tuple:
-    """Return (in_range: bool, lat: float, lng: float, distance_km: float).
-    Distance-authoritative: geocode and measure real km from Antwerp.
-    If geocoding fails, keep the event (True) but mark distance -1 (unknown) with None coords."""
-    loc = " ".join(filter(None, [address, city])).strip()
-    if not loc:
-        return True, None, None, -1.0
-    coords = geocode(loc) or geocode(city)
-    if not coords:
-        return True, None, None, -1.0
-    dist = round(geodesic(ANTWERP_COORDS, coords).km, 1)
-    return dist <= MAX_DISTANCE_KM, coords[0], coords[1], dist
+
+def get_coordinates(city: str, address: str = "") -> tuple:
+    """Return (lat, lng) from the known city map for enrichment only."""
+    return lookup_known_coordinates(address, city)
 
 # HTML parsing uses shared `inner_text` from scrapers.utils
 
@@ -143,6 +134,7 @@ def parse_listing(html: str, target_dates: list) -> list:
             "source":        "LatinWorld",
             "url":           event_url,
             "name":          name,
+            "venue":         "",
             "organizer":     organizer,
             "date":          str(current_date),
             "day":           NL_DAYS.get(current_date.weekday(), "").lower(),
@@ -169,7 +161,58 @@ def parse_listing(html: str, target_dates: list) -> list:
 def parse_detail(html: str, event: dict) -> dict:
     updated = dict(event)
 
+    def looks_like_country(text: str) -> bool:
+        t = (text or "").strip().lower()
+        return any(k in t for k in ["netherlands", "nederland", "belgium", "belgie", "belgië"])
+
+    # Venue is optional: extract first non-empty text anchor to /latin/dansscholen/.
+    venue_matches = re.findall(
+        r'<a[^>]+href=["\'][^"\']*latin/dansscholen/[^/"\'][^"\']*["\'][^>]*>(.*?)</a>',
+        html,
+        re.DOTALL | re.IGNORECASE,
+    )
+    for vm in venue_matches:
+        venue = inner_text(vm).strip()
+        if venue.lower() == "latin dansscholen":
+            continue
+        if venue:
+            updated["venue"] = venue
+            break
+
+    # Organizer selector: link to /organisaties/ path is the consistent source.
+    org_m = re.search(
+        r'<td[^>]*>\s*<a[^>]+href=["\'][^"\']*organisaties/[^"\']*["\'][^>]*>(.*?)</a>\s*</td>',
+        html,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if org_m:
+        organizer = inner_text(org_m.group(1)).strip()
+        if organizer:
+            updated["organizer"] = organizer
+
+    # Common detail-row structure on LatinWorld:
+    # organizer(/organisaties/) + address + city + country in adjacent <td> cells.
+    oac_m = re.search(
+        r'<td[^>]*>\s*<a[^>]+href=["\'][^"\']*organisaties/[^"\']*["\'][^>]*>.*?</a>\s*</td>\s*'
+        r'<td[^>]*>\s*([^<][^<]*?)\s*</td>\s*'
+        r'<td[^>]*>\s*([^<][^<]*?)\s*</td>\s*'
+        r'<td[^>]*>\s*([^<][^<]*?)\s*</td>',
+        html,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if oac_m:
+        addr = inner_text(oac_m.group(1)).strip()
+        cty = inner_text(oac_m.group(2)).strip()
+        ctry = inner_text(oac_m.group(3)).strip()
+        if addr:
+            updated["address"] = addr
+        if cty:
+            updated["city"] = cty
+        if ctry:
+            updated["country"] = ctry
+
     rows = re.findall(r'<tr[^>]*>(.*?)</tr>', html, re.DOTALL | re.IGNORECASE)
+    parsed_rows = []
 
     for row in rows:
         cells = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL | re.IGNORECASE)
@@ -178,6 +221,7 @@ def parse_detail(html: str, event: dict) -> dict:
 
         label = inner_text(cells[0]).strip().lower()
         value = inner_text(cells[1]).strip()
+        parsed_rows.append((label, value))
 
         if not value:
             continue
@@ -207,6 +251,24 @@ def parse_detail(html: str, event: dict) -> dict:
                 city_m = re.search(r'\d{4}\s*[A-Z]{0,2}\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ\s\-]{2,25})', value)
                 if city_m:
                     updated['city'] = city_m.group(1).strip()
+
+        elif 'land' in label or 'country' in label:
+            updated['country'] = value
+
+    # LatinWorld often puts city/country in blank-label rows after the address row.
+    for idx, (label, value) in enumerate(parsed_rows):
+        if 'adres' in label or 'address' in label:
+            # Next non-empty blank-label row -> city
+            for j in range(idx + 1, min(idx + 5, len(parsed_rows))):
+                nl, nv = parsed_rows[j]
+                if nv and nl == "":
+                    if not updated.get('city'):
+                        updated['city'] = nv
+                        continue
+                    if not updated.get('country') and looks_like_country(nv):
+                        updated['country'] = nv
+                        break
+            break
 
         elif 'omschrijving' in label or 'beschrijving' in label or 'description' in label:
             updated['description'] = value[:300]
@@ -269,7 +331,7 @@ async def scrape_latinworld(target_dates: list) -> list:
         page = await ctx.new_page()
 
         try:
-            await page.goto(LATINWORLD_URL, wait_until="networkidle", timeout=45000)
+            await page.goto(LATINWORLD_URL, wait_until="domcontentloaded", timeout=30000)
         except Exception as e:
             print(f"  ⚠️  {e}")
 
@@ -286,14 +348,14 @@ async def scrape_latinworld(target_dates: list) -> list:
             await browser.close()
             return []
 
-        sem = asyncio.Semaphore(3)
+        sem = asyncio.Semaphore(6)
 
         async def fetch_detail(event):
             async with sem:
                 dp = await ctx.new_page()
                 try:
                     print(f"  🔍 {event['name'][:50]} ({event['city']})")
-                    await dp.goto(event['url'], wait_until="networkidle", timeout=30000)
+                    await dp.goto(event['url'], wait_until="domcontentloaded", timeout=15000)
                     await asyncio.sleep(random.uniform(0.4, 0.9))
                     detail_html = await dp.content()
                     return parse_detail(detail_html, event)
@@ -306,16 +368,8 @@ async def scrape_latinworld(target_dates: list) -> list:
         enriched = await asyncio.gather(*[fetch_detail(e) for e in events])
         await browser.close()
 
-    latin_events = []
-    skipped = []
-    for e in enriched:
-        if e.get('_is_latin') is False:
-            skipped.append(e['name'])
-        else:
-            latin_events.append(e)
-
-    if skipped:
-        print(f"  Skipped {len(skipped)} non-latin events: {', '.join(skipped[:5])}")
+    raw_events = list(enriched)
+    print(f"  Raw events in target range: {len(raw_events)}")
 
     def is_bachata_only(name: str) -> bool:
         name_lower = name.lower()
@@ -327,47 +381,46 @@ async def scrape_latinworld(target_dates: list) -> list:
         """True if the event is purely kizomba/semba/urban with NO salsa.
         This feed is salsa-first, so kizomba-only events are excluded."""
         text = f"{name} {genres}".lower()
-        has_salsa = 'salsa' in text
-        if has_salsa:
-            return False  # salsa present -> keep
+        has_other = any(w in text for w in ['salsa', 'bachata', 'sbk', 'latin', 'son', 'timba', 'cumbia'])
+        if has_other:
+            return False
         has_kizomba = any(w in text for w in ['kizomba', 'semba', 'urban kizz', 'urbankizz', ' kizz'])
         return has_kizomba
 
+    excluded_bachata_only = 0
+    excluded_kizomba_only = 0
     filtered_events = []
-    for e in latin_events:
+    for e in raw_events:
         name = e.get('name', '')
         genres = e.get('music_genres', '')
-        city = e.get('city', '').strip().lower()
 
-        if city == 'utrecht':
-            print(f"  ⛔ Skipping Utrecht event: {name[:50]}")
-            continue
         if is_bachata_only(name):
+            excluded_bachata_only += 1
             print(f"  ⛔ Skipping bachata-only event: {name[:50]}")
             continue
         if is_kizomba_only(name, genres):
+            excluded_kizomba_only += 1
             print(f"  ⛔ Skipping kizomba-only event: {name[:50]}")
             continue
         filtered_events.append(e)
 
-    nearby = []
+    kept_events = []
     for e in filtered_events:
-        city = e.get('city', '')
-        address = e.get('address', '')
-        in_range, lat, lng, dist = is_within_range(city, address)
-        status = "✅" if in_range else "❌"
-        dist_str = f"{dist}km" if dist >= 0 else "dist?"
-        print(f"  {status} {e['name'][:40]} @ {city} ({dist_str})")
-        if in_range:
-            evt = {**e}
-            evt['lat'] = lat
-            evt['lng'] = lng
-            # Remove internal fields that start with _
-            evt = {k: v for k, v in evt.items() if not k.startswith('_')}
-            nearby.append(evt)
+        lat, lng = get_coordinates(e.get('city', ''), e.get('address', ''))
+        evt = {**e}
+        evt['lat'] = lat
+        evt['lng'] = lng
+        evt = {k: v for k, v in evt.items() if not k.startswith('_')}
+        kept_events.append(evt)
 
-    print(f"  → {len(nearby)} LatinWorld events kept")
-    return nearby
+    print(
+        "  Funnel (LatinWorld): "
+        f"raw={len(raw_events)}, "
+        f"bachata_only_excluded={excluded_bachata_only}, "
+        f"kizomba_only_excluded={excluded_kizomba_only}, "
+        f"kept={len(kept_events)}"
+    )
+    return kept_events
 
 # --- STANDALONE RUN ---
 

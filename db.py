@@ -32,6 +32,7 @@ def init_db(db_path: Optional[str] = None) -> Path:
             date TEXT,
             time TEXT,
             venue TEXT,
+            organizer TEXT,
             address TEXT,
             city TEXT,
             country TEXT,
@@ -46,6 +47,12 @@ def init_db(db_path: Optional[str] = None) -> Path:
         )
         """
     )
+    # Lightweight migration for existing DBs created before organizer existed.
+    cur.execute("PRAGMA table_info(events)")
+    existing_cols = {row[1] for row in cur.fetchall()}
+    if "organizer" not in existing_cols:
+        cur.execute("ALTER TABLE events ADD COLUMN organizer TEXT")
+
     # Indexes to speed up lookups and simple dedupe checks
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_date ON events(date)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_events_name_date ON events(event_name, date)")
@@ -56,7 +63,7 @@ def init_db(db_path: Optional[str] = None) -> Path:
 
 
 def _row_to_event(row: Tuple) -> Dict:
-    (id_, event_name, date_, time_, venue, address, city, country, lat, lng,
+    (id_, event_name, date_, time_, venue, organizer, address, city, country, lat, lng,
      price, source_url, image_url, description, active, inserted_at) = row
     return {
         "id": id_,
@@ -64,6 +71,7 @@ def _row_to_event(row: Tuple) -> Dict:
         "date": date_,
         "time": time_,
         "venue": venue,
+        "organizer": organizer,
         "address": address,
         "city": city,
         "country": country,
@@ -124,10 +132,36 @@ def find_duplicate(conn: sqlite3.Connection, event: Dict) -> Optional[int]:
     return None
 
 
+def _normalize_event(event: Dict) -> Dict:
+    """Normalize scraper output keys to DB schema keys."""
+    src = (event.get("source") or "").strip().lower()
+    country = event.get("country")
+    if not country and src == "salsalovers":
+        country = "Belgium"
+
+    lat = event.get("lat")
+    lng = event.get("lng")
+    coords = event.get("coordinates")
+    if (lat is None or lng is None) and isinstance(coords, (list, tuple)) and len(coords) == 2:
+        lat, lng = coords[0], coords[1]
+
+    normalized = dict(event)
+    normalized["event_name"] = event.get("event_name") or event.get("name")
+    normalized["source_url"] = event.get("source_url") or event.get("url")
+    normalized["venue"] = event.get("venue")
+    normalized["organizer"] = event.get("organizer")
+    normalized["country"] = country
+    normalized["lat"] = lat
+    normalized["lng"] = lng
+    return normalized
+
+
 def upsert_event(db_path: Optional[str], event: Dict) -> int:
     path = db_path or DEFAULT_DB
     conn = sqlite3.connect(path)
     cur = conn.cursor()
+
+    event = _normalize_event(event)
 
     eid = find_duplicate(conn, event)
     now = datetime.utcnow().isoformat()
@@ -138,7 +172,7 @@ def upsert_event(db_path: Optional[str], event: Dict) -> int:
         if existing:
             updated = {}
             keys = [
-                "event_name", "date", "time", "venue", "address", "city", "country",
+                "event_name", "date", "time", "venue", "organizer", "address", "city", "country",
                 "lat", "lng", "price", "source_url", "image_url", "description"
             ]
             for i, k in enumerate(keys, start=1):
@@ -150,13 +184,13 @@ def upsert_event(db_path: Optional[str], event: Dict) -> int:
             cur.execute(
                 """
                 UPDATE events SET
-                  event_name = ?, date = ?, time = ?, venue = ?, address = ?, city = ?, country = ?,
+                                    event_name = ?, date = ?, time = ?, venue = ?, organizer = ?, address = ?, city = ?, country = ?,
                   lat = ?, lng = ?, price = ?, source_url = ?, image_url = ?, description = ?,
                   active = 1, inserted_at = ?
                 WHERE id = ?
                 """,
                 (
-                    updated["event_name"], updated["date"], updated["time"], updated["venue"],
+                                        updated["event_name"], updated["date"], updated["time"], updated["venue"], updated["organizer"],
                     updated["address"], updated["city"], updated["country"],
                     updated["lat"], updated["lng"], updated["price"], updated["source_url"],
                     updated["image_url"], updated["description"], now, eid,
@@ -170,12 +204,12 @@ def upsert_event(db_path: Optional[str], event: Dict) -> int:
     cur.execute(
         """
         INSERT INTO events (
-            event_name, date, time, venue, address, city, country,
+            event_name, date, time, venue, organizer, address, city, country,
             lat, lng, price, source_url, image_url, description, active, inserted_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)
         """,
         (
-            event.get("event_name"), event.get("date"), event.get("time"), event.get("venue"),
+            event.get("event_name"), event.get("date"), event.get("time"), event.get("venue"), event.get("organizer"),
             event.get("address"), event.get("city"), event.get("country"),
             event.get("lat"), event.get("lng"), event.get("price"), event.get("source_url"),
             event.get("image_url"), event.get("description"), now,

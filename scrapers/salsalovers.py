@@ -12,12 +12,9 @@ import sys
 import time
 import random
 from datetime import date, timedelta, datetime
-from geopy.distance import geodesic
-from scrapers.utils import geocode, inner_text, parse_dutch_date
+from scrapers.utils import KNOWN_COORDS, inner_text, parse_dutch_date
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
-ANTWERP_COORDS  = (51.2194, 4.4025)
-MAX_DISTANCE_KM = 120
 BASE_URL        = "https://agenda.salsalovers.be"
 TARGET_URL      = f"{BASE_URL}/parties"
 
@@ -33,26 +30,41 @@ NL_DAYS = {4: "Vrijdag", 5: "Zaterdag", 6: "Zondag",
 # Shared parsing and geocoding helpers are imported from scrapers.utils.
 
 # ─── GEOCODING ────────────────────────────────────────────────────────────────
-# Source-specific geocoding and distance helpers remain below.
+# Source-specific geocoding helper remains below for lat/lng enrichment only.
 
 
-def get_coordinates_and_distance(city: str, address: str = "", coords=None) -> tuple:
-    """Return (in_range: bool, lat: float, lng: float, distance_km: float).
-    Distance-authoritative: prefer explicit coords, else geocode the location.
-    If geocoding fails, keep the event with dist -1 (unknown) and None for coords."""
+def lookup_known_coordinates(*parts: str) -> tuple:
+    for part in parts:
+        key = str(part or "").strip().lower()
+        if not key:
+            continue
+        for city_key, coords in KNOWN_COORDS.items():
+            if city_key in key:
+                return coords
+    return None, None
+
+
+def get_coordinates(city: str, address: str = "", coords=None) -> tuple:
+    """Return (lat, lng), preferring explicit coordinates then known city matches."""
     if coords:
-        dist = round(geodesic(ANTWERP_COORDS, coords).km, 1)
-        return dist <= MAX_DISTANCE_KM, coords[0], coords[1], dist
+        return coords[0], coords[1]
 
-    loc = " ".join(filter(None, [address, city])).strip()
-    if not loc:
-        return True, None, None, -1.0
+    return lookup_known_coordinates(address, city)
 
-    gc = geocode(loc) or geocode(city)
-    if not gc:
-        return True, None, None, -1.0
-    dist = round(geodesic(ANTWERP_COORDS, gc).km, 1)
-    return dist <= MAX_DISTANCE_KM, gc[0], gc[1], dist
+
+def is_bachata_only(name: str) -> bool:
+    text = (name or "").lower()
+    has_bachata = 'bachata' in text
+    has_other = any(word in text for word in ['salsa', 'sbk', 'kizomba', 'latin', 'son', 'timba', 'cumbia'])
+    return has_bachata and not has_other
+
+
+def is_kizomba_only(name: str, description: str = "") -> bool:
+    text = f"{name or ''} {description or ''}".lower()
+    has_other = any(word in text for word in ['salsa', 'bachata', 'sbk', 'latin', 'son', 'timba', 'cumbia'])
+    if has_other:
+        return False
+    return any(word in text for word in ['kizomba', 'semba', 'urban kizz', 'urbankizz', ' kizz'])
 
 # ─── STEP 1: COLLECT URLS FROM LISTING ───────────────────────────────────────
 
@@ -78,6 +90,7 @@ def parse_detail(html: str, stub: dict) -> dict:
         "id":            stub["id"],
         "url":           stub["url"],
         "name":          "",
+        "venue":         "",
         "organizer":     "",
         "date":          "",
         "date_text":     "",
@@ -219,6 +232,14 @@ def parse_detail(html: str, stub: dict) -> dict:
                         break
             except Exception:
                 pass
+
+    # Venue
+    venue_m = re.search(
+        r'class="[^"]*c-event__location__name[^"]*"[^>]*>\s*([^<]+?)\s*</div>',
+        html, re.IGNORECASE
+    )
+    if venue_m:
+        event['venue'] = venue_m.group(1).strip()
 
     # Organizer
     org_m = re.search(
@@ -388,7 +409,7 @@ async def scrape_salsalovers(target_dates: list) -> list:
         page = await ctx.new_page()
 
         try:
-            await page.goto(TARGET_URL, wait_until="networkidle", timeout=45000)
+            await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=30000)
         except Exception as e:
             print(f"  ⚠️  Timeout (normal for Cloudflare): {e}")
 
@@ -415,7 +436,7 @@ async def scrape_salsalovers(target_dates: list) -> list:
             async with sem:
                 dp = await ctx.new_page()
                 try:
-                    await dp.goto(stub['url'], wait_until="networkidle", timeout=30000)
+                    await dp.goto(stub['url'], wait_until="domcontentloaded", timeout=15000)
                     await asyncio.sleep(random.uniform(0.4, 0.8))
                     detail_html = await dp.content()
                     return parse_detail(detail_html, stub)
@@ -435,25 +456,37 @@ async def scrape_salsalovers(target_dates: list) -> list:
         if e and e.get('date') in target_set:
             weekend_events.append(e)
 
-    print(f"  {len(weekend_events)} events match the target range")
+    print(f"  Raw events in target range: {len(weekend_events)}")
 
-    # Filter by distance and extract lat/lng
+    excluded_bachata_only = 0
+    excluded_kizomba_only = 0
     kept = []
-    print(f"\n📍 Distance filter (SalsaLovers)...")
     for e in weekend_events:
-        in_range, lat, lng, dist = get_coordinates_and_distance(
-            e.get('city', ''), e.get('address', ''), e.get('coordinates')
-        )
-        status = "✅" if in_range else "❌"
-        print(f"  {status} {e.get('name','?')[:45]} @ {e.get('city','')} → {dist}km")
-        if in_range:
-            # Remove internal fields and add lat/lng
-            evt = {k: v for k, v in e.items() if not k.startswith('_') and k != 'coordinates'}
-            evt['lat'] = lat
-            evt['lng'] = lng
-            kept.append(evt)
+        name = e.get('name', '')
+        description = e.get('description', '')
 
-    print(f"  → {len(kept)} SalsaLovers events kept")
+        if is_bachata_only(name):
+            excluded_bachata_only += 1
+            print(f"  ⛔ Skipping bachata-only event: {name[:45]}")
+            continue
+        if is_kizomba_only(name, description):
+            excluded_kizomba_only += 1
+            print(f"  ⛔ Skipping kizomba-only event: {name[:45]}")
+            continue
+
+        lat, lng = get_coordinates(e.get('city', ''), e.get('address', ''), e.get('coordinates'))
+        evt = {k: v for k, v in e.items() if not k.startswith('_') and k != 'coordinates'}
+        evt['lat'] = lat
+        evt['lng'] = lng
+        kept.append(evt)
+
+    print(
+        "  Funnel (SalsaLovers): "
+        f"raw={len(weekend_events)}, "
+        f"bachata_only_excluded={excluded_bachata_only}, "
+        f"kizomba_only_excluded={excluded_kizomba_only}, "
+        f"kept={len(kept)}"
+    )
     return kept
 
 # ─── STANDALONE RUN ───────────────────────────────────────────────────────────
