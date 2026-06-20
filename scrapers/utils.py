@@ -38,6 +38,7 @@ KNOWN_COORDS = {
     "rotterdam": (51.9244, 4.4777), "breda": (51.5719, 4.7683), "tilburg": (51.5555, 5.0913),
     "den haag": (52.0705, 4.3007), "scheveningen": (52.1080, 4.2730),
     "dordrecht": (51.8133, 4.6901), "eindhoven": (51.4416, 5.4697),
+    "ermelo": (52.2988, 5.6211),
     "middelburg": (51.4988, 3.6109), "vlissingen": (51.4426, 3.5737),
     "terneuzen": (51.3360, 3.8280), "hulst": (51.2810, 4.0570), "goes": (51.5040, 3.8880),
     "bergen op zoom": (51.4940, 4.2870), "roosendaal": (51.5310, 4.4650),
@@ -47,6 +48,8 @@ KNOWN_COORDS = {
     "arnhem": (51.9851, 5.8987), "amersfoort": (52.1561, 5.3878),
     "nieuw vennep": (52.2640, 4.6336), "hoofddorp": (52.3030, 4.6890), "rhenen": (51.9606, 5.5719),
     "zwolle": (52.5168, 6.0830), "enschede": (52.2215, 6.8937), "groningen": (53.2194, 6.5665),
+    "mol": (51.1909, 5.1166), "nivelle": (50.5982, 4.3285), "nivelles": (50.5982, 4.3285),
+    "ottignies-louvain-la-neuve": (50.6690, 4.6110),
 }
 
 

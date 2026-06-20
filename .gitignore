@@ -6,3 +6,9 @@ raw_events_*.json
 latinworld_raw_*.json
 salsalovers_raw_*.json
 *.tar.gz
+
+# APScheduler persistent job store — contains only scheduling metadata
+# (next run time etc.), not event data. Excluded because it's regenerated
+# on first startup and committing stale job data causes confusion.
+apscheduler_jobs.db
+events.db

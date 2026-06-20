@@ -26,7 +26,7 @@ import sys
 import time
 import random
 from datetime import date, timedelta, datetime
-from scrapers.utils import KNOWN_COORDS, inner_text, parse_dutch_date
+from scrapers.utils import KNOWN_COORDS, geocode, inner_text, parse_dutch_date
 
 # --- CONFIG ---
 LATINWORLD_URL  = "https://www.latinworld.nl/salsa/agenda/?periode=1"
@@ -60,8 +60,19 @@ def lookup_known_coordinates(*parts: str) -> tuple:
 
 
 def get_coordinates(city: str, address: str = "") -> tuple:
-    """Return (lat, lng) from the known city map for enrichment only."""
-    return lookup_known_coordinates(address, city)
+    """Return (lat, lng) with known-city first, then geocode fallback."""
+    lat, lng = lookup_known_coordinates(address, city)
+    if lat is not None and lng is not None:
+        return lat, lng
+
+    for query in [address, city]:
+        q = (query or "").strip()
+        if not q:
+            continue
+        coords = geocode(q)
+        if coords:
+            return coords[0], coords[1]
+    return None, None
 
 # HTML parsing uses shared `inner_text` from scrapers.utils
 
@@ -248,6 +259,10 @@ def parse_detail(html: str, event: dict) -> dict:
             updated['description'] = value[:300]
             break
 
+    # If venue is missing, use organizer as a conservative fallback label.
+    if not updated.get('venue') and updated.get('organizer'):
+        updated['venue'] = updated['organizer']
+
     # LatinWorld often puts city/country in blank-label rows after the address row.
     for idx, (label, value) in enumerate(parsed_rows):
         if 'adres' in label or 'address' in label:
@@ -285,6 +300,14 @@ def parse_detail(html: str, event: dict) -> dict:
     img = re.search(r'<img[^>]+src="(https://[^"]+\.(?:jpg|jpeg|png|webp))[^"]*"', html, re.IGNORECASE)
     if img:
         updated['image_url'] = img.group(1)
+
+    # Country fallback for rows where the site omits the country cell.
+    if not updated.get('country'):
+        text = f"{updated.get('address', '')} {updated.get('city', '')}".lower()
+        if any(k in text for k in ['belgium', 'belgie', 'belgië']):
+            updated['country'] = 'Belgium'
+        elif text.strip():
+            updated['country'] = 'Netherlands'
 
     return updated
 

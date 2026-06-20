@@ -12,7 +12,7 @@ import sys
 import time
 import random
 from datetime import date, timedelta, datetime
-from scrapers.utils import KNOWN_COORDS, inner_text, parse_dutch_date
+from scrapers.utils import KNOWN_COORDS, geocode, inner_text, parse_dutch_date
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 BASE_URL        = "https://agenda.salsalovers.be"
@@ -48,8 +48,18 @@ def get_coordinates(city: str, address: str = "", coords=None) -> tuple:
     """Return (lat, lng), preferring explicit coordinates then known city matches."""
     if coords:
         return coords[0], coords[1]
+    lat, lng = lookup_known_coordinates(address, city)
+    if lat is not None and lng is not None:
+        return lat, lng
 
-    return lookup_known_coordinates(address, city)
+    for query in [address, city]:
+        q = (query or "").strip()
+        if not q:
+            continue
+        fallback = geocode(q)
+        if fallback:
+            return fallback[0], fallback[1]
+    return None, None
 
 
 def is_bachata_only(name: str) -> bool:

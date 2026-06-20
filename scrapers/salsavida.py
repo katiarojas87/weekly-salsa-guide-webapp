@@ -256,6 +256,8 @@ def parse_detail(url: str, target_set: set) -> list:
             event["organizer"] = org.get("name", "")
         elif isinstance(org, str):
             event["organizer"] = org
+        if not event["organizer"] and event["venue"]:
+            event["organizer"] = event["venue"]
 
         # Description
         desc = ld.get("description", "")
