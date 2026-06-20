@@ -5,3 +5,6 @@ fastapi
 uvicorn
 apscheduler>=3.10.0
 sqlalchemy>=2.0.0
+beautifulsoup4
+sqlalchemy
+python-dotenv
