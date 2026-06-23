@@ -10,7 +10,3 @@ services:
         value: "*"
       - key: PYTHON_VERSION
         value: "3.12.9"
-    disk:
-      name: salsa-data
-      mountPath: /data
-      sizeGB: 1

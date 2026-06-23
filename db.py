@@ -12,12 +12,14 @@ Schema (table `events`): columns match normalized event schema plus metadata.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 from datetime import datetime, date
 from typing import List, Dict, Optional, Tuple
 
-DEFAULT_DB = Path(__file__).parent / "events.db"
+_DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent))
+DEFAULT_DB = _DATA_DIR / "events.db"
 
 
 def init_db(db_path: Optional[str] = None) -> Path:

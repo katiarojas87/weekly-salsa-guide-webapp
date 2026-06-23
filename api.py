@@ -31,7 +31,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
-from scrapers import scrape_salsalovers, scrape_latinworld
+from scrapers import scrape_salsalovers, scrape_latinworld, scrape_salsavida
 from scrapers.event_sources import scrape_generic_sources, load_manual_events
 from db import init_db, save_events, deactivate_past_events, get_events
 
@@ -123,9 +123,10 @@ def run_weekly_pipeline():
         finally:
             loop.close()
 
+        vida    = scrape_salsavida(week_dates)
         generic = scrape_generic_sources(week_dates)
         manual  = load_manual_events("manual_events.json", week_dates)
-        all_events = salsa + latin + generic + manual
+        all_events = salsa + latin + vida + generic + manual
         logger.info("Scraped %d events total", len(all_events))
 
         # Step 3: persist to SQLite
@@ -148,6 +149,7 @@ def run_weekly_pipeline():
             "total_events":      len(all_events),
             "salsalovers_count": len(salsa),
             "latinworld_count":  len(latin),
+            "salsavida_count":   len(vida),
             "generic_count":     len(generic),
             "manual_count":      len(manual),
         }
@@ -166,7 +168,8 @@ def run_weekly_pipeline():
 # Without this, a fresh process has no memory of the missed fire time.
 # Note: this only covers restart scenarios. If the process was fully asleep
 # past the grace window, UptimeRobot pinging /health prevents that case.
-_JOB_STORE_URL = f"sqlite:///{Path(__file__).parent / 'apscheduler_jobs.db'}"
+_DATA_DIR = Path(os.environ.get("DATA_DIR", Path(__file__).parent))
+_JOB_STORE_URL = f"sqlite:///{_DATA_DIR / 'apscheduler_jobs.db'}"
 _scheduler = BackgroundScheduler(
     jobstores={"default": SQLAlchemyJobStore(url=_JOB_STORE_URL)},
     timezone="Europe/Brussels",
@@ -241,9 +244,10 @@ async def scrape():
 
         salsa   = await scrape_salsalovers(target_dates)
         latin   = await scrape_latinworld(target_dates)
+        vida    = scrape_salsavida(target_dates)
         generic = scrape_generic_sources(target_dates)
         manual  = load_manual_events("manual_events.json", target_dates)
-        all_events = salsa + latin + generic + manual
+        all_events = salsa + latin + vida + generic + manual
 
         init_db(None)
         deactivated = deactivate_past_events(None, start_date)
@@ -265,6 +269,7 @@ async def scrape():
             "total_events":      len(all_events),
             "salsalovers_count": len(salsa),
             "latinworld_count":  len(latin),
+            "salsavida_count":   len(vida),
             "generic_count":     len(generic),
             "manual_count":      len(manual),
             "cached":            False,
