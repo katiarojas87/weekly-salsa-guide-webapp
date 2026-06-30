@@ -103,6 +103,8 @@ def _normalize_event(raw: dict, source: str = "Generic", source_url: str = "") -
         "facebook_url": raw.get("facebook_url", ""),
         "instagram_url": raw.get("instagram_url", ""),
         "image_url": raw.get("image_url", ""),
+        "lat": raw.get("lat"),
+        "lng": raw.get("lng"),
         "coordinates": raw.get("coordinates"),
         "music_genres": raw.get("music_genres", ""),
         "djs": raw.get("djs", ""),

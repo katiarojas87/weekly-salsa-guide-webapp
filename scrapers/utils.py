@@ -107,18 +107,36 @@ def fetch_html(url: str, timeout: int = 20):
         return ""
 
 
+def _looks_like_address(text: str) -> bool:
+    """True if the string appears to be a street address rather than a city name."""
+    return bool(re.search(r'\d', text))
+
+
 def geocode(location: str):
+    """Return (lat, lng) for a location string.
+
+    Street addresses (containing digits) are sent to Nominatim first so that
+    the specific location is returned, not a city-centre fallback.
+    Pure city names use KNOWN_COORDS first for speed, then Nominatim.
+    """
     key = str(location).strip().lower()
     if not key:
         return None
     if key in _geocache:
         return _geocache[key]
-    for city_key, coords in KNOWN_COORDS.items():
-        if re.search(r'\b' + re.escape(city_key) + r'\b', key):
-            _geocache[key] = coords
-            return coords
+
+    is_address = _looks_like_address(key)
+
+    if not is_address:
+        # Fast path for city-only names
+        for city_key, coords in KNOWN_COORDS.items():
+            if re.search(r'\b' + re.escape(city_key) + r'\b', key):
+                _geocache[key] = coords
+                return coords
+
+    # Try Nominatim — Belgium first (primary market), then Netherlands, then bare
     time.sleep(1.1)
-    for query in [f"{location}, Netherlands", f"{location}, Belgium", location]:
+    for query in [f"{location}, Belgium", f"{location}, Netherlands", location]:
         try:
             loc = _geo.geocode(query)
             if loc:
@@ -127,5 +145,13 @@ def geocode(location: str):
                 return coords
         except Exception:
             pass
+
+    # Last resort for full addresses: fall back to city-centre from KNOWN_COORDS
+    if is_address:
+        for city_key, coords in KNOWN_COORDS.items():
+            if re.search(r'\b' + re.escape(city_key) + r'\b', key):
+                _geocache[key] = coords
+                return coords
+
     _geocache[key] = None
     return None
