@@ -115,19 +115,39 @@ def run_weekly_pipeline():
             logger.info("Already scraped this week (%s) — skipping", out_file)
             return
 
-        # Step 2: scrape (async coroutines run in a fresh event loop)
+        # Step 2: scrape — per-source isolation so one failure doesn't lose all results
+        scrape_errors = {}
         loop = asyncio.new_event_loop()
         try:
-            salsa = loop.run_until_complete(scrape_salsalovers(week_dates))
-            latin = loop.run_until_complete(scrape_latinworld(week_dates))
+            try:
+                salsa = loop.run_until_complete(scrape_salsalovers(week_dates))
+            except Exception as exc:
+                logger.exception("SalsaLovers scraper failed in weekly pipeline")
+                salsa = []
+                scrape_errors["salsalovers"] = str(exc)
+
+            try:
+                latin = loop.run_until_complete(scrape_latinworld(week_dates))
+            except Exception as exc:
+                logger.exception("LatinWorld scraper failed in weekly pipeline")
+                latin = []
+                scrape_errors["latinworld"] = str(exc)
         finally:
             loop.close()
 
-        vida    = scrape_salsavida(week_dates)
+        try:
+            vida = scrape_salsavida(week_dates)
+        except Exception as exc:
+            logger.exception("SalsaVida scraper failed in weekly pipeline")
+            vida = []
+            scrape_errors["salsavida"] = str(exc)
+
         generic = scrape_generic_sources(week_dates)
         manual  = load_manual_events("manual_events.json", week_dates)
         all_events = salsa + latin + vida + generic + manual
-        logger.info("Scraped %d events total", len(all_events))
+        if scrape_errors:
+            logger.warning("Weekly pipeline: %d source(s) failed: %s", len(scrape_errors), scrape_errors)
+        logger.info("Scraped %d events total (salsa=%d latin=%d vida=%d)", len(all_events), len(salsa), len(latin), len(vida))
 
         # Step 3: persist to SQLite
         saved = save_events(None, all_events)
@@ -242,17 +262,46 @@ async def scrape():
             cached["cached"] = True
             return cached
 
-        salsa   = await scrape_salsalovers(target_dates)
-        latin   = await scrape_latinworld(target_dates)
-        vida    = scrape_salsavida(target_dates)
-        generic = scrape_generic_sources(target_dates)
+        errors = {}
+
+        try:
+            salsa = await scrape_salsalovers(target_dates)
+        except Exception as exc:
+            logger.exception("SalsaLovers scraper failed")
+            salsa = []
+            errors["salsalovers"] = str(exc)
+
+        try:
+            latin = await scrape_latinworld(target_dates)
+        except Exception as exc:
+            logger.exception("LatinWorld scraper failed")
+            latin = []
+            errors["latinworld"] = str(exc)
+
+        try:
+            vida = scrape_salsavida(target_dates)
+        except Exception as exc:
+            logger.exception("SalsaVida scraper failed")
+            vida = []
+            errors["salsavida"] = str(exc)
+
+        try:
+            generic = scrape_generic_sources(target_dates)
+        except Exception as exc:
+            logger.exception("GenericSources scraper failed")
+            generic = []
+            errors["generic"] = str(exc)
+
         manual  = load_manual_events("manual_events.json", target_dates)
         all_events = salsa + latin + vida + generic + manual
+
+        if errors:
+            logger.warning("Scrape completed with %d source error(s): %s", len(errors), errors)
 
         init_db(None)
         deactivated = deactivate_past_events(None, start_date)
         saved = save_events(None, all_events)
-        logger.info("Manual scrape: deactivated=%d saved=%d", deactivated, saved)
+        logger.info("Manual scrape: deactivated=%d saved=%d errors=%s", deactivated, saved, errors or "none")
 
         days = {}
         for d in target_dates:
@@ -273,6 +322,7 @@ async def scrape():
             "generic_count":     len(generic),
             "manual_count":      len(manual),
             "cached":            False,
+            "errors":            errors,
         }
         with open(out_file, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)

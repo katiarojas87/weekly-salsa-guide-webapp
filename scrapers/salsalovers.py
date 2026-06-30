@@ -105,7 +105,12 @@ def collect_urls(html: str) -> list:
                 "id":  party_id,
                 "url": f"{BASE_URL}{m.group(1)}",
             })
-    print(f"  Found {len(urls)} unique event URLs on listing page")
+    if not urls:
+        # Likely a Cloudflare challenge page or empty response
+        is_cf = "cloudflare" in html.lower() or "challenge" in html.lower() or "__cf_" in html
+        print(f"  WARNING: 0 event URLs found on listing page (cloudflare_challenge={is_cf}, html_size={len(html):,})")
+    else:
+        print(f"  Found {len(urls)} unique event URLs on listing page")
     return urls
 
 # ─── STEP 2: PARSE DETAIL PAGE ────────────────────────────────────────────────
