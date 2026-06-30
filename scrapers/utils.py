@@ -114,7 +114,7 @@ def geocode(location: str):
     if key in _geocache:
         return _geocache[key]
     for city_key, coords in KNOWN_COORDS.items():
-        if city_key in key:
+        if re.search(r'\b' + re.escape(city_key) + r'\b', key):
             _geocache[key] = coords
             return coords
     time.sleep(1.1)

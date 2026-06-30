@@ -311,7 +311,8 @@ async def events(
         )
 
     # Read active events from DB — NEVER trigger a live scrape here
-    all_active = get_events(None)
+    today_str = str(date.today())
+    all_active = [e for e in get_events(None) if (e.get("date") or "") >= today_str]
 
     # Exclude events with null coordinates; log how many are dropped
     no_coords = [e for e in all_active if e.get("lat") is None or e.get("lng") is None]
