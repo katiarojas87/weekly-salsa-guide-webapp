@@ -330,6 +330,11 @@ BROWSER_ARGS = [
     "--no-sandbox", "--disable-setuid-sandbox",
     "--disable-blink-features=AutomationControlled",
     "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--no-zygote",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-sync",
 ]
 BROWSER_CTX = dict(
     user_agent=(
@@ -374,7 +379,7 @@ async def scrape_latinworld(target_dates: list) -> list:
             await browser.close()
             return []
 
-        sem = asyncio.Semaphore(6)
+        sem = asyncio.Semaphore(2)
 
         async def fetch_detail(event):
             async with sem:
