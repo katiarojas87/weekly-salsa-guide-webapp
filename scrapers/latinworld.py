@@ -60,18 +60,31 @@ def lookup_known_coordinates(*parts: str) -> tuple:
 
 
 def get_coordinates(city: str, address: str = "") -> tuple:
-    """Return (lat, lng) with known-city first, then geocode fallback."""
-    lat, lng = lookup_known_coordinates(address, city)
+    """Return (lat, lng) for an event.
+
+    Priority:
+    1. Full street address geocoded via Nominatim (most accurate).
+    2. City-centre from KNOWN_COORDS (fast city-level fallback).
+    3. Nominatim on bare city name.
+    """
+    # Geocode the full address — geocode() uses Nominatim first for street addresses
+    addr = (address or "").strip()
+    if addr:
+        result = geocode(addr)
+        if result:
+            return result[0], result[1]
+
+    # Fall back to city-centre (city name only, never address string)
+    lat, lng = lookup_known_coordinates(city)
     if lat is not None and lng is not None:
         return lat, lng
 
-    for query in [address, city]:
-        q = (query or "").strip()
-        if not q:
-            continue
-        coords = geocode(q)
-        if coords:
-            return coords[0], coords[1]
+    c = (city or "").strip()
+    if c:
+        result = geocode(c)
+        if result:
+            return result[0], result[1]
+
     return None, None
 
 # HTML parsing uses shared `inner_text` from scrapers.utils

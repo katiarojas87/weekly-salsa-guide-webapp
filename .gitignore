@@ -7,6 +7,12 @@ latinworld_raw_*.json
 salsalovers_raw_*.json
 *.tar.gz
 
+# Playwright browser automation artifacts
+.playwright-mcp/
+
+# Dev/test screenshots
+step*.png
+
 # APScheduler persistent job store — contains only scheduling metadata
 # (next run time etc.), not event data. Excluded because it's regenerated
 # on first startup and committing stale job data causes confusion.

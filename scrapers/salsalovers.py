@@ -45,20 +45,36 @@ def lookup_known_coordinates(*parts: str) -> tuple:
 
 
 def get_coordinates(city: str, address: str = "", coords=None) -> tuple:
-    """Return (lat, lng), preferring explicit coordinates then known city matches."""
+    """Return (lat, lng) for an event.
+
+    Priority:
+    1. Explicit coords extracted from the event page HTML.
+    2. Full street address geocoded via Nominatim (most accurate).
+    3. City-centre from KNOWN_COORDS (fast city-level fallback).
+    4. Nominatim on bare city name.
+    """
     if coords:
         return coords[0], coords[1]
-    lat, lng = lookup_known_coordinates(address, city)
+
+    # Geocode the full address — geocode() will use Nominatim first for street addresses
+    addr = (address or "").strip()
+    if addr:
+        result = geocode(addr)
+        if result:
+            return result[0], result[1]
+
+    # Fall back to city-centre coordinates (city name only, not address)
+    lat, lng = lookup_known_coordinates(city)
     if lat is not None and lng is not None:
         return lat, lng
 
-    for query in [address, city]:
-        q = (query or "").strip()
-        if not q:
-            continue
-        fallback = geocode(q)
-        if fallback:
-            return fallback[0], fallback[1]
+    # Last resort: geocode the bare city name
+    c = (city or "").strip()
+    if c:
+        result = geocode(c)
+        if result:
+            return result[0], result[1]
+
     return None, None
 
 
