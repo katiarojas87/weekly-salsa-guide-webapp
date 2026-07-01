@@ -3,14 +3,14 @@ services:
     name: weekly-salsa-guide-api
     runtime: python
     plan: free
-    buildCommand: "pip install -r requirements.txt && PLAYWRIGHT_BROWSERS_PATH=/opt/render/project/src/.playwright-browsers playwright install chromium"
+    buildCommand: "pip install -r requirements.txt"
     startCommand: "uvicorn api:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: ALLOWED_ORIGIN
         value: "*"
       - key: PYTHON_VERSION
         value: "3.12.9"
-      - key: PLAYWRIGHT_BROWSERS_PATH
-        value: "/opt/render/project/src/.playwright-browsers"
       - key: LOCATIONIQ_API_KEY
+        sync: false
+      - key: PUSH_SECRET
         sync: false
