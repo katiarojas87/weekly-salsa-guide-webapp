@@ -350,8 +350,10 @@ BROWSER_CTX = dict(
 # --- MAIN SCRAPE FUNCTION ---
 
 async def scrape_latinworld(target_dates: list) -> list:
+    import requests as _requests
     from playwright.async_api import async_playwright
 
+    # --- Step 1: Playwright for the listing page only (needs JS scroll) ---
     print("\nLoading LatinWorld...")
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
@@ -360,44 +362,43 @@ async def scrape_latinworld(target_dates: list) -> list:
             "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
         )
         page = await ctx.new_page()
-
         try:
             await page.goto(LATINWORLD_URL, wait_until="domcontentloaded", timeout=30000)
         except Exception as e:
             print(f"  ⚠️  {e}")
-
         for _ in range(6):
             await page.keyboard.press("End")
             await asyncio.sleep(0.8)
-
         html = await page.content()
         print(f"  HTML size: {len(html):,} chars")
+        await browser.close()  # close before detail fetching — saves ~150MB
 
-        events = parse_listing(html, target_dates)
-        if not events:
-            print("  Warning: no LatinWorld events found for this weekend")
-            await browser.close()
-            return []
+    events = parse_listing(html, target_dates)
+    if not events:
+        print("  Warning: no LatinWorld events found for this weekend")
+        return []
 
-        sem = asyncio.Semaphore(1)
+    # --- Step 2: plain requests for detail pages (no JS needed) ---
+    print(f"  Fetching {len(events)} detail pages via requests...")
+    session = _requests.Session()
+    session.headers.update({
+        "User-Agent": BROWSER_CTX["user_agent"],
+        "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
+    })
 
-        async def fetch_detail(event):
-            async with sem:
-                dp = await ctx.new_page()
-                try:
-                    await dp.goto(event['url'], wait_until="domcontentloaded", timeout=15000)
-                    await asyncio.sleep(random.uniform(0.4, 0.9))
-                    detail_html = await dp.content()
-                    return parse_detail(detail_html, event)
-                except Exception as e:
-                    print(f"  ⚠️  {event['name'][:30]}: {e}")
-                    return event
-                finally:
-                    await dp.close()
+    sem = asyncio.Semaphore(4)
 
-        enriched = await asyncio.gather(*[fetch_detail(e) for e in events])
-        await browser.close()
+    async def fetch_detail(event):
+        async with sem:
+            try:
+                resp = await asyncio.to_thread(session.get, event["url"], timeout=15)
+                if resp.ok:
+                    return parse_detail(resp.text, event)
+            except Exception as e:
+                print(f"  ⚠️  {event['name'][:30]}: {e}")
+            return event
 
+    enriched = await asyncio.gather(*[fetch_detail(e) for e in events])
     raw_events = list(enriched)
     print(f"  Raw events in target range: {len(raw_events)}")
 
