@@ -1,11 +1,13 @@
 """Shared scraper utilities for parsing, fetching, and geocoding."""
 
+import os
 import re
-import time
 from datetime import date, datetime
 
 import requests
-from geopy.geocoders import Nominatim
+from dotenv import load_dotenv
+
+load_dotenv()
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -54,7 +56,8 @@ KNOWN_COORDS = {
 
 
 _geocache: dict = {}
-_geo = Nominatim(user_agent="scraper_utils/1.0", timeout=10)
+_LOCATIONIQ_KEY = os.environ.get("LOCATIONIQ_API_KEY", "")
+_LOCATIONIQ_URL = "https://us1.locationiq.com/v1/search"
 
 
 def inner_text(html: str) -> str:
@@ -115,9 +118,9 @@ def _looks_like_address(text: str) -> bool:
 def geocode(location: str):
     """Return (lat, lng) for a location string.
 
-    Street addresses (containing digits) are sent to Nominatim first so that
+    Street addresses (containing digits) are sent to LocationIQ first so that
     the specific location is returned, not a city-centre fallback.
-    Pure city names use KNOWN_COORDS first for speed, then Nominatim.
+    Pure city names use KNOWN_COORDS first for speed, then LocationIQ.
     """
     key = str(location).strip().lower()
     if not key:
@@ -134,17 +137,23 @@ def geocode(location: str):
                 _geocache[key] = coords
                 return coords
 
-    # Try Nominatim — Belgium first (primary market), then Netherlands, then bare
-    time.sleep(1.1)
-    for query in [f"{location}, Belgium", f"{location}, Netherlands", location]:
-        try:
-            loc = _geo.geocode(query)
-            if loc:
-                coords = (loc.latitude, loc.longitude)
-                _geocache[key] = coords
-                return coords
-        except Exception:
-            pass
+    # Try LocationIQ — Belgium first (primary market), then Netherlands, then bare
+    if _LOCATIONIQ_KEY:
+        for query in [f"{location}, Belgium", f"{location}, Netherlands", location]:
+            try:
+                resp = requests.get(
+                    _LOCATIONIQ_URL,
+                    params={"key": _LOCATIONIQ_KEY, "q": query, "format": "json", "limit": 1},
+                    timeout=10,
+                )
+                if resp.ok:
+                    data = resp.json()
+                    if data:
+                        coords = (float(data[0]["lat"]), float(data[0]["lon"]))
+                        _geocache[key] = coords
+                        return coords
+            except Exception:
+                pass
 
     # Last resort for full addresses: fall back to city-centre from KNOWN_COORDS
     if is_address:

@@ -12,3 +12,5 @@ services:
         value: "3.12.9"
       - key: PLAYWRIGHT_BROWSERS_PATH
         value: "/opt/render/project/src/.playwright-browsers"
+      - key: LOCATIONIQ_API_KEY
+        sync: false
