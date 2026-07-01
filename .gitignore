@@ -18,3 +18,4 @@ step*.png
 # on first startup and committing stale job data causes confusion.
 apscheduler_jobs.db
 events.db
+events.db
