@@ -17,10 +17,12 @@ scheduler block below and add to crontab:
 """
 
 import asyncio
+import gc
 import glob
 import json
 import logging
 import os
+import resource
 from datetime import datetime, date, timedelta
 from math import radians, sin, cos, sqrt, atan2
 from pathlib import Path
@@ -56,6 +58,28 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+def _mem_mb() -> int:
+    """Current process RSS in MB (Linux: ru_maxrss is KB; macOS: bytes)."""
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return rss // 1024  # KB → MB on Linux (Render)
+
+
+def _run_in_new_loop(coro_fn, *args):
+    """Run an async scraper in a brand-new event loop, then fully close it.
+
+    Running each Playwright scraper in its own loop ensures the Chromium
+    subprocess is reaped by the OS before the next browser instance launches.
+    Without this, both browsers can briefly overlap in memory.
+    Called via asyncio.to_thread() from async contexts.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro_fn(*args))
+    finally:
+        loop.close()
+        gc.collect()
 
 
 def get_scrape_dates():
@@ -114,32 +138,37 @@ def run_weekly_pipeline():
             logger.info("Already scraped this week (%s) — skipping", out_file)
             return
 
-        # Step 2: scrape — per-source isolation so one failure doesn't lose all results
+        # Step 2: scrape — per-source isolation; each Playwright scraper gets its
+        # own event loop so Chromium is fully reaped before the next one starts.
         scrape_errors = {}
-        loop = asyncio.new_event_loop()
+
+        logger.info("Memory before SalsaLovers: %dMB", _mem_mb())
         try:
-            try:
-                salsa = loop.run_until_complete(scrape_salsalovers(week_dates))
-            except Exception as exc:
-                logger.exception("SalsaLovers scraper failed in weekly pipeline")
-                salsa = []
-                scrape_errors["salsalovers"] = str(exc)
+            salsa = _run_in_new_loop(scrape_salsalovers, week_dates)
+        except Exception as exc:
+            logger.exception("SalsaLovers scraper failed in weekly pipeline")
+            salsa = []
+            scrape_errors["salsalovers"] = str(exc)
+        logger.info("Memory after SalsaLovers: %dMB", _mem_mb())
 
-            try:
-                latin = loop.run_until_complete(scrape_latinworld(week_dates))
-            except Exception as exc:
-                logger.exception("LatinWorld scraper failed in weekly pipeline")
-                latin = []
-                scrape_errors["latinworld"] = str(exc)
-        finally:
-            loop.close()
+        logger.info("Memory before LatinWorld: %dMB", _mem_mb())
+        try:
+            latin = _run_in_new_loop(scrape_latinworld, week_dates)
+        except Exception as exc:
+            logger.exception("LatinWorld scraper failed in weekly pipeline")
+            latin = []
+            scrape_errors["latinworld"] = str(exc)
+        logger.info("Memory after LatinWorld: %dMB", _mem_mb())
 
+        logger.info("Memory before SalsaVida: %dMB", _mem_mb())
         try:
             vida = scrape_salsavida(week_dates)
         except Exception as exc:
             logger.exception("SalsaVida scraper failed in weekly pipeline")
             vida = []
             scrape_errors["salsavida"] = str(exc)
+        gc.collect()
+        logger.info("Memory after SalsaVida: %dMB", _mem_mb())
 
         generic = scrape_generic_sources(week_dates)
         manual  = load_manual_events("manual_events.json", week_dates)
@@ -266,26 +295,35 @@ async def scrape():
 
         errors = {}
 
+        # Each Playwright scraper runs in its own thread + event loop so
+        # Chromium is fully reaped before the next browser instance starts.
+        logger.info("Memory before SalsaLovers: %dMB", _mem_mb())
         try:
-            salsa = await scrape_salsalovers(target_dates)
+            salsa = await asyncio.to_thread(_run_in_new_loop, scrape_salsalovers, target_dates)
         except Exception as exc:
             logger.exception("SalsaLovers scraper failed")
             salsa = []
             errors["salsalovers"] = str(exc)
+        logger.info("Memory after SalsaLovers: %dMB", _mem_mb())
 
+        logger.info("Memory before LatinWorld: %dMB", _mem_mb())
         try:
-            latin = await scrape_latinworld(target_dates)
+            latin = await asyncio.to_thread(_run_in_new_loop, scrape_latinworld, target_dates)
         except Exception as exc:
             logger.exception("LatinWorld scraper failed")
             latin = []
             errors["latinworld"] = str(exc)
+        logger.info("Memory after LatinWorld: %dMB", _mem_mb())
 
+        logger.info("Memory before SalsaVida: %dMB", _mem_mb())
         try:
             vida = scrape_salsavida(target_dates)
         except Exception as exc:
             logger.exception("SalsaVida scraper failed")
             vida = []
             errors["salsavida"] = str(exc)
+        gc.collect()
+        logger.info("Memory after SalsaVida: %dMB", _mem_mb())
 
         try:
             generic = scrape_generic_sources(target_dates)

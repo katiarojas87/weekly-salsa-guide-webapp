@@ -379,7 +379,7 @@ async def scrape_latinworld(target_dates: list) -> list:
             await browser.close()
             return []
 
-        sem = asyncio.Semaphore(2)
+        sem = asyncio.Semaphore(1)
 
         async def fetch_detail(event):
             async with sem:

@@ -466,7 +466,7 @@ async def scrape_salsalovers(target_dates: list) -> list:
             await browser.close()
             return []
 
-        sem = asyncio.Semaphore(2)
+        sem = asyncio.Semaphore(1)
 
         async def fetch_detail(stub):
             async with sem:
