@@ -59,7 +59,7 @@ def lookup_known_coordinates(*parts: str) -> tuple:
     return None, None
 
 
-def get_coordinates(city: str, address: str = "") -> tuple:
+def get_coordinates(city: str, address: str = "", country: str = None) -> tuple:
     """Return (lat, lng) for an event.
 
     Priority:
@@ -70,7 +70,7 @@ def get_coordinates(city: str, address: str = "") -> tuple:
     # Geocode the full address — geocode() uses Nominatim first for street addresses
     addr = (address or "").strip()
     if addr:
-        result = geocode(addr)
+        result = geocode(addr, country)
         if result:
             return result[0], result[1]
 
@@ -81,7 +81,7 @@ def get_coordinates(city: str, address: str = "") -> tuple:
 
     c = (city or "").strip()
     if c:
-        result = geocode(c)
+        result = geocode(c, country)
         if result:
             return result[0], result[1]
 
@@ -435,7 +435,7 @@ async def scrape_latinworld(target_dates: list) -> list:
 
     kept_events = []
     for e in filtered_events:
-        lat, lng = get_coordinates(e.get('city', ''), e.get('address', ''))
+        lat, lng = get_coordinates(e.get('city', ''), e.get('address', ''), e.get('country'))
         evt = {**e}
         evt['lat'] = lat
         evt['lng'] = lng

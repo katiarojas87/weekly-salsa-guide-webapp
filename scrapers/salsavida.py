@@ -239,7 +239,7 @@ def parse_detail(url: str, target_set: set) -> list:
 
         # Geocode fallback if no lat/lng from JSON-LD
         if event["lat"] is None and (event["city"] or event["address"]):
-            coords = geocode(event["city"] or event["address"])
+            coords = geocode(event["city"] or event["address"], event.get("country"))
             if coords:
                 event["lat"], event["lng"] = coords[0], coords[1]
 

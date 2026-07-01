@@ -59,6 +59,29 @@ _geocache: dict = {}
 _LOCATIONIQ_KEY = os.environ.get("LOCATIONIQ_API_KEY", "")
 _LOCATIONIQ_URL = "https://us1.locationiq.com/v1/search"
 
+# Rough (lat_min, lat_max, lng_min, lng_max) boxes used to reject LocationIQ
+# matches that land nowhere near the country we already know the event is in
+# (e.g. a Netherlands address wrongly geocoded to a "Belgium"-qualified query).
+_COUNTRY_BBOX = {
+    "belgium":     (49.3, 51.6, 2.3, 6.5),
+    "netherlands": (50.6, 53.7, 3.1, 7.3),
+}
+
+
+def _country_order(country: str) -> list:
+    c = (country or "").strip().lower()
+    if "nether" in c or "nederl" in c or "holland" in c:
+        return ["Netherlands", "Belgium"]
+    return ["Belgium", "Netherlands"]
+
+
+def _in_bbox(lat: float, lng: float, country: str) -> bool:
+    box = _COUNTRY_BBOX.get((country or "").strip().lower())
+    if not box:
+        return True
+    lat_min, lat_max, lng_min, lng_max = box
+    return lat_min <= lat <= lat_max and lng_min <= lng <= lng_max
+
 
 def inner_text(html: str) -> str:
     text = re.sub(r'&nbsp;', ' ', html)
@@ -115,18 +138,24 @@ def _looks_like_address(text: str) -> bool:
     return bool(re.search(r'\d', text))
 
 
-def geocode(location: str):
+def geocode(location: str, country: str = None):
     """Return (lat, lng) for a location string.
 
     Street addresses (containing digits) are sent to LocationIQ first so that
     the specific location is returned, not a city-centre fallback.
     Pure city names use KNOWN_COORDS first for speed, then LocationIQ.
+
+    `country`, when known (e.g. from the event's own JSON-LD address), is
+    queried first and used to sanity-check the result — otherwise a bad
+    LocationIQ match for the wrong country (e.g. "Amsterdam, Belgium"
+    resolving to some unrelated Belgian point) gets accepted as-is.
     """
     key = str(location).strip().lower()
     if not key:
         return None
-    if key in _geocache:
-        return _geocache[key]
+    cache_key = f"{key}|{(country or '').strip().lower()}"
+    if cache_key in _geocache:
+        return _geocache[cache_key]
 
     is_address = _looks_like_address(key)
 
@@ -134,12 +163,13 @@ def geocode(location: str):
         # Fast path for city-only names
         for city_key, coords in KNOWN_COORDS.items():
             if re.search(r'\b' + re.escape(city_key) + r'\b', key):
-                _geocache[key] = coords
+                _geocache[cache_key] = coords
                 return coords
 
-    # Try LocationIQ — Belgium first (primary market), then Netherlands, then bare
+    # Try LocationIQ — known country first (if any), then the other, then bare
     if _LOCATIONIQ_KEY:
-        for query in [f"{location}, Belgium", f"{location}, Netherlands", location]:
+        countries = _country_order(country)
+        for query, query_country in [(f"{location}, {c}", c) for c in countries] + [(location, None)]:
             try:
                 resp = requests.get(
                     _LOCATIONIQ_URL,
@@ -149,9 +179,11 @@ def geocode(location: str):
                 if resp.ok:
                     data = resp.json()
                     if data:
-                        coords = (float(data[0]["lat"]), float(data[0]["lon"]))
-                        _geocache[key] = coords
-                        return coords
+                        lat, lng = float(data[0]["lat"]), float(data[0]["lon"])
+                        if query_country and not _in_bbox(lat, lng, query_country):
+                            continue
+                        _geocache[cache_key] = (lat, lng)
+                        return (lat, lng)
             except Exception:
                 pass
 
@@ -159,8 +191,8 @@ def geocode(location: str):
     if is_address:
         for city_key, coords in KNOWN_COORDS.items():
             if re.search(r'\b' + re.escape(city_key) + r'\b', key):
-                _geocache[key] = coords
+                _geocache[cache_key] = coords
                 return coords
 
-    _geocache[key] = None
+    _geocache[cache_key] = None
     return None
