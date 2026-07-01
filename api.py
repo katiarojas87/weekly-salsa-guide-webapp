@@ -26,10 +26,11 @@ logger = logging.getLogger("salsa_api")
 
 app = FastAPI(title="Salsa Events API", version="3.0")
 
-_allowed_origin = os.environ.get("ALLOWED_ORIGIN", "*")
+_allowed_origins_raw = os.environ.get("ALLOWED_ORIGIN", "*")
+_allowed_origins = [o.strip() for o in _allowed_origins_raw.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[_allowed_origin],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
