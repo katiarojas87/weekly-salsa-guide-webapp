@@ -58,12 +58,11 @@ app.add_middleware(
 )
 
 
-def get_next_week_dates():
-    """Return list of 7 dates: next Monday through Sunday."""
+def get_scrape_dates():
+    """Return 14 dates: this Monday through the Sunday of next week."""
     today = date.today()
-    days_ahead = (7 - today.weekday()) % 7 or 7
-    next_monday = today + timedelta(days=days_ahead)
-    return [next_monday + timedelta(days=i) for i in range(7)]
+    this_monday = today - timedelta(days=today.weekday())
+    return [this_monday + timedelta(days=i) for i in range(14)]
 
 
 def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -101,7 +100,7 @@ def run_weekly_pipeline():
     """
     logger.info("=== Weekly pipeline triggered ===")
     try:
-        week_dates = get_next_week_dates()
+        week_dates = get_scrape_dates()
         start_date = week_dates[0]
         out_file   = f"raw_events_{start_date}.json"
 
@@ -162,11 +161,14 @@ def run_weekly_pipeline():
                 "label":  f"{NL_DAYS[d.weekday()]} {d.day} {NL_MON[d.month]}",
                 "events": day_events,
             }
+        next_monday_str = str(week_dates[7])
         result = {
             "generated_at":      datetime.now().isoformat(),
             "range":             {"start": str(week_dates[0]), "end": str(week_dates[-1])},
             "days":              list(days.values()),
             "total_events":      len(all_events),
+            "this_week_count":   sum(1 for e in all_events if e.get("date", "") < next_monday_str),
+            "next_week_count":   sum(1 for e in all_events if e.get("date", "") >= next_monday_str),
             "salsalovers_count": len(salsa),
             "latinworld_count":  len(latin),
             "salsavida_count":   len(vida),
@@ -251,7 +253,7 @@ async def scheduler_status():
 async def scrape():
     """Manually trigger the pipeline (admin use). Not called by the frontend."""
     try:
-        target_dates = get_next_week_dates()
+        target_dates = get_scrape_dates()
         start_date   = target_dates[0]
         out_file     = f"raw_events_{start_date}.json"
 
@@ -311,11 +313,14 @@ async def scrape():
                 "label":  f"{NL_DAYS[d.weekday()]} {d.day} {NL_MON[d.month]}",
                 "events": day_events,
             }
+        next_monday_str = str(target_dates[7])
         result = {
             "generated_at":      datetime.now().isoformat(),
             "range":             {"start": str(target_dates[0]), "end": str(target_dates[-1])},
             "days":              list(days.values()),
             "total_events":      len(all_events),
+            "this_week_count":   sum(1 for e in all_events if e.get("date", "") < next_monday_str),
+            "next_week_count":   sum(1 for e in all_events if e.get("date", "") >= next_monday_str),
             "salsalovers_count": len(salsa),
             "latinworld_count":  len(latin),
             "salsavida_count":   len(vida),
