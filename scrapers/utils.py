@@ -35,7 +35,9 @@ KNOWN_COORDS = {
     "affligem": (50.9050, 4.1120), "steenokkerzeel": (50.9130, 4.5180),
     "kortrijk": (50.8280, 3.2650), "brussel": (50.8503, 4.3517), "brussels": (50.8503, 4.3517),
     "blankenberge": (51.3128, 3.1320), "brugge": (51.2093, 3.2247),
-    "mechelen": (51.0259, 4.4776), "leuven": (50.8798, 4.3517),
+    # "leuven" was previously (50.8798, 4.3517) — Brussels' longitude, a
+    # copy-paste bug caught by the Fix 4 coordinate audit. Corrected below.
+    "mechelen": (51.0259, 4.4776), "leuven": (50.8798, 4.7005),
     "turnhout": (51.3220, 4.9440), "hasselt": (50.9307, 5.3378), "lint": (51.1320, 4.4870),
     "rotterdam": (51.9244, 4.4777), "breda": (51.5719, 4.7683), "tilburg": (51.5555, 5.0913),
     "den haag": (52.0705, 4.3007), "scheveningen": (52.1080, 4.2730),
@@ -51,7 +53,30 @@ KNOWN_COORDS = {
     "nieuw vennep": (52.2640, 4.6336), "hoofddorp": (52.3030, 4.6890), "rhenen": (51.9606, 5.5719),
     "zwolle": (52.5168, 6.0830), "enschede": (52.2215, 6.8937), "groningen": (53.2194, 6.5665),
     "mol": (51.1909, 5.1166), "nivelle": (50.5982, 4.3285), "nivelles": (50.5982, 4.3285),
-    "ottignies-louvain-la-neuve": (50.6690, 4.6110),
+    "ottignies-louvain-la-neuve": (50.6690, 4.6110), "louvain-la-neuve": (50.6690, 4.6110),
+    # Belgium — added after Stekene/Middelkerke geocoding incidents
+    "aalst": (50.9383, 4.0392), "boechout": (51.1636, 4.4964),
+    "charleroi": (50.4116, 4.4445), "dendermonde": (51.0312, 4.0981),
+    "genk": (50.9655, 5.5001), "kessel-lo": (50.8852, 4.7314),
+    "liege": (50.6451, 5.5736), "liège": (50.6451, 5.5736),
+    "meerhout": (51.1317, 5.0772), "middelkerke": (51.1897, 2.7742),
+    "mons": (50.4550, 3.9520), "olen": (51.1439, 4.8597),
+    "oostende": (51.2259, 2.9195), "ostend": (51.2259, 2.9195),
+    "roeselare": (50.9450, 3.1244), "schepdaal": (50.8349, 4.1920),
+    "snaaskerke": (51.1746, 2.9375), "waterloo": (50.7175, 4.3978),
+    "westmalle": (51.2969, 4.6938), "wijnegem": (51.2271, 4.5225),
+    # Netherlands — same batch
+    "alkmaar": (52.6009, 4.8171), "alphen aan den rijn": (52.1131, 4.6408),
+    "bilthoven": (52.1290, 5.2046), "capelle aan den ijssel": (51.9313, 4.5884),
+    "deventer": (52.2695, 6.2365), "elst": (51.9188, 5.8453),
+    "goirle": (51.5056, 5.0338), "gouda": (52.0115, 4.7106),
+    "heerenveen": (52.9985, 5.9231), "heerhugowaard": (52.6631, 4.8327),
+    "hilversum": (52.2241, 5.1719), "lelystad": (52.5367, 5.3610),
+    "leusden": (52.1304, 5.4287), "perkpolder": (51.3983, 4.0164),
+    "the hague": (52.0800, 4.3113), "volendam": (52.4964, 5.0683),
+    "zaandam": (52.4425, 4.8299), "zandvoort": (52.3720, 4.5302),
+    "zeist": (52.0893, 5.2276), "s-hertogenbosch": (51.6889, 5.3031),
+    "den bosch": (51.6889, 5.3031),
 }
 
 
@@ -90,15 +115,6 @@ def _known_city_match(key: str):
         if re.search(r'\b' + re.escape(city_key) + r'\b', key):
             return coords
     return None
-
-
-def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    from math import radians, sin, cos, sqrt, atan2
-    R = 6371.0
-    dlat = radians(lat2 - lat1)
-    dlng = radians(lng2 - lng1)
-    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
-    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 
 
 def inner_text(html: str) -> str:
@@ -151,22 +167,19 @@ def fetch_html(url: str, timeout: int = 20):
         return ""
 
 
-def _looks_like_address(text: str) -> bool:
-    """True if the string appears to be a street address rather than a city name."""
-    return bool(re.search(r'\d', text))
-
-
 def geocode(location: str, country: str = None):
     """Return (lat, lng) for a location string.
 
-    Street addresses (containing digits) are sent to LocationIQ first so that
-    the specific location is returned, not a city-centre fallback.
-    Pure city names use KNOWN_COORDS first for speed, then LocationIQ.
+    KNOWN_COORDS entries are manually verified and take priority whenever the
+    location (city name or full street address) contains a known city —
+    LocationIQ's street-level geocoding for small Belgian/Dutch municipalities
+    has repeatedly returned plausible-but-wrong coordinates (tens of km off,
+    even offshore), so a city-centre coordinate accurate to ~1km beats a
+    "precise" LocationIQ point that might be badly wrong.
 
-    `country`, when known (e.g. from the event's own JSON-LD address), is
-    queried first and used to sanity-check the result — otherwise a bad
-    LocationIQ match for the wrong country (e.g. "Amsterdam, Belgium"
-    resolving to some unrelated Belgian point) gets accepted as-is.
+    LocationIQ is only used for locations with no KNOWN_COORDS match, and even
+    then the result is rejected if it lands far from the sea, or (when
+    `country` is known) outside that country's rough bounding box.
     """
     key = str(location).strip().lower()
     if not key:
@@ -175,10 +188,8 @@ def geocode(location: str, country: str = None):
     if cache_key in _geocache:
         return _geocache[cache_key]
 
-    is_address = _looks_like_address(key)
     known = _known_city_match(key)
-
-    if not is_address and known:
+    if known:
         _geocache[cache_key] = known
         return known
 
@@ -198,23 +209,14 @@ def geocode(location: str, country: str = None):
                         lat, lng = float(data[0]["lat"]), float(data[0]["lon"])
                         if query_country and not _in_bbox(lat, lng, query_country):
                             continue
-                        # Reject address-level matches that land far from the
-                        # known city centre — a low-confidence LocationIQ hit
-                        # (e.g. a street address geocoded to the wrong town)
-                        # is worse than falling back to the city centre.
-                        if known and _haversine_km(lat, lng, known[0], known[1]) > 15:
+                        # Reject points in the North Sea — no legitimate BE/NL
+                        # event should geocode west of 2.5°E.
+                        if lng < 2.5:
                             continue
                         _geocache[cache_key] = (lat, lng)
                         return (lat, lng)
             except Exception:
                 pass
-
-    # Last resort: fall back to the known city-centre, if any (covers both a
-    # full address whose LocationIQ match was rejected above, and a city name
-    # that isn't in KNOWN_COORDS but LocationIQ also failed to resolve).
-    if known:
-        _geocache[cache_key] = known
-        return known
 
     _geocache[cache_key] = None
     return None

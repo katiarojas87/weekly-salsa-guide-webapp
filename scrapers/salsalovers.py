@@ -39,7 +39,9 @@ def lookup_known_coordinates(*parts: str) -> tuple:
         if not key:
             continue
         for city_key, coords in KNOWN_COORDS.items():
-            if city_key in key:
+            # Word-boundary match — a plain substring check would let e.g.
+            # "olen" falsely match inside "volendam".
+            if re.search(r'\b' + re.escape(city_key) + r'\b', key):
                 return coords
     return None, None
 
@@ -49,26 +51,26 @@ def get_coordinates(city: str, address: str = "", coords=None) -> tuple:
 
     Priority:
     1. Explicit coords extracted from the event page HTML.
-    2. Full street address geocoded via Nominatim (most accurate).
-    3. City-centre from KNOWN_COORDS (fast city-level fallback).
-    4. Nominatim on bare city name.
+    2. City-centre from KNOWN_COORDS — checked via the `city` field directly,
+       not by hoping the city name appears inside `address`. LocationIQ has
+       repeatedly returned wrong-country matches for addresses with no
+       country hint, so a verified city-centre beats a LocationIQ guess.
+    3. Full street address geocoded via LocationIQ (only if city is unknown).
+    4. LocationIQ on the bare city name.
     """
     if coords:
         return coords[0], coords[1]
 
-    # Geocode the full address — geocode() will use Nominatim first for street addresses
+    lat, lng = lookup_known_coordinates(city)
+    if lat is not None and lng is not None:
+        return lat, lng
+
     addr = (address or "").strip()
     if addr:
         result = geocode(addr)
         if result:
             return result[0], result[1]
 
-    # Fall back to city-centre coordinates (city name only, not address)
-    lat, lng = lookup_known_coordinates(city)
-    if lat is not None and lng is not None:
-        return lat, lng
-
-    # Last resort: geocode the bare city name
     c = (city or "").strip()
     if c:
         result = geocode(c)
