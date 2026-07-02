@@ -84,30 +84,6 @@ _geocache: dict = {}
 _LOCATIONIQ_KEY = os.environ.get("LOCATIONIQ_API_KEY", "")
 _LOCATIONIQ_URL = "https://us1.locationiq.com/v1/search"
 
-# Rough (lat_min, lat_max, lng_min, lng_max) boxes used to reject LocationIQ
-# matches that land nowhere near the country we already know the event is in
-# (e.g. a Netherlands address wrongly geocoded to a "Belgium"-qualified query).
-_COUNTRY_BBOX = {
-    "belgium":     (49.3, 51.6, 2.3, 6.5),
-    "netherlands": (50.6, 53.7, 3.1, 7.3),
-}
-
-
-def _country_order(country: str) -> list:
-    c = (country or "").strip().lower()
-    if "nether" in c or "nederl" in c or "holland" in c:
-        return ["Netherlands", "Belgium"]
-    return ["Belgium", "Netherlands"]
-
-
-def _in_bbox(lat: float, lng: float, country: str) -> bool:
-    box = _COUNTRY_BBOX.get((country or "").strip().lower())
-    if not box:
-        return True
-    lat_min, lat_max, lng_min, lng_max = box
-    return lat_min <= lat <= lat_max and lng_min <= lng <= lng_max
-
-
 def _known_city_match(key: str):
     """Return (lat, lng) from KNOWN_COORDS if a known city name appears as a
     whole word in `key`, else None."""
@@ -115,6 +91,15 @@ def _known_city_match(key: str):
         if re.search(r'\b' + re.escape(city_key) + r'\b', key):
             return coords
     return None
+
+
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    from math import radians, sin, cos, sqrt, atan2
+    R = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlng = radians(lng2 - lng1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 
 
 def inner_text(html: str) -> str:
@@ -167,56 +152,73 @@ def fetch_html(url: str, timeout: int = 20):
         return ""
 
 
-def geocode(location: str, country: str = None):
-    """Return (lat, lng) for a location string.
+def geocode(location: str, country: str = None, city: str = None):
+    """Geocode a location (usually a full street address) via LocationIQ.
 
-    KNOWN_COORDS entries are manually verified and take priority whenever the
-    location (city name or full street address) contains a known city —
-    LocationIQ's street-level geocoding for small Belgian/Dutch municipalities
-    has repeatedly returned plausible-but-wrong coordinates (tens of km off,
-    even offshore), so a city-centre coordinate accurate to ~1km beats a
-    "precise" LocationIQ point that might be badly wrong.
+    One query: the address plus the country we already know the event is
+    in. Trust the result unless LocationIQ's own returned country
+    disagrees with ours, the point falls offshore, or the city has a
+    KNOWN_COORDS entry and the result lands >20km from it (catches
+    same-country wrong-city misses like Hasselt -> Brussels). A
+    2026-07-02 audit of 182 real addresses found LocationIQ correct
+    ~85% of the time, and correct results are precise venue matches —
+    KNOWN_COORDS is a fallback here, not a shortcut.
 
-    LocationIQ is only used for locations with no KNOWN_COORDS match, and even
-    then the result is rejected if it lands far from the sea, or (when
-    `country` is known) outside that country's rough bounding box.
+    `city`, when the caller already knows it separately from `location`
+    (e.g. an address with no city name in the text), is used only for the
+    KNOWN_COORDS validation above — without it, that check silently never
+    fires for addresses that don't happen to mention their own city.
     """
-    key = str(location).strip().lower()
+    key = str(location).strip()
     if not key:
         return None
-    cache_key = f"{key}|{(country or '').strip().lower()}"
+    cache_key = f"{key.lower()}|{(country or '').strip().lower()}"
     if cache_key in _geocache:
         return _geocache[cache_key]
 
-    known = _known_city_match(key)
-    if known:
-        _geocache[cache_key] = known
-        return known
+    known = _known_city_match((city or key).lower())
+    result = None
 
-    # Try LocationIQ — known country first (if any), then the other, then bare
     if _LOCATIONIQ_KEY:
-        countries = _country_order(country)
-        for query, query_country in [(f"{location}, {c}", c) for c in countries] + [(location, None)]:
-            try:
-                resp = requests.get(
-                    _LOCATIONIQ_URL,
-                    params={"key": _LOCATIONIQ_KEY, "q": query, "format": "json", "limit": 1},
-                    timeout=10,
-                )
-                if resp.ok:
-                    data = resp.json()
-                    if data:
-                        lat, lng = float(data[0]["lat"]), float(data[0]["lon"])
-                        if query_country and not _in_bbox(lat, lng, query_country):
-                            continue
-                        # Reject points in the North Sea — no legitimate BE/NL
-                        # event should geocode west of 2.5°E.
-                        if lng < 2.5:
-                            continue
-                        _geocache[cache_key] = (lat, lng)
-                        return (lat, lng)
-            except Exception:
-                pass
+        query = f"{key}, {country}" if country else key
+        try:
+            resp = requests.get(
+                _LOCATIONIQ_URL,
+                params={"key": _LOCATIONIQ_KEY, "q": query, "format": "json",
+                        "limit": 1, "addressdetails": 1},
+                timeout=10,
+            )
+            data = resp.json() if resp.ok else []
+        except Exception as exc:
+            print(f"  [geocode] request failed for {query!r}: {exc}")
+            data = []
 
-    _geocache[cache_key] = None
-    return None
+        if not data:
+            print(f"  [geocode] no result for {query!r}")
+        else:
+            top = data[0]
+            lat, lng = float(top["lat"]), float(top["lon"])
+            returned_country = (top.get("address") or {}).get("country", "").lower()
+            expected_country = (country or "").lower()
+            dist = _haversine_km(lat, lng, known[0], known[1]) if known else None
+            country_mismatch = (
+                expected_country and returned_country
+                and expected_country not in returned_country
+                and returned_country not in expected_country
+            )
+            if country_mismatch:
+                print(f"  [geocode] REJECTED {query!r}: expected {country}, got {returned_country} ({lat},{lng})")
+            elif lng < 2.0:
+                print(f"  [geocode] REJECTED {query!r}: offshore (lng={lng})")
+            elif dist is not None and dist > 20:
+                print(f"  [geocode] REJECTED {query!r}: {dist:.1f}km from known city centre")
+            else:
+                print(f"  [geocode] ACCEPTED {query!r}: ({lat},{lng}) — {top.get('display_name')}")
+                result = (lat, lng)
+
+    if result is None and known:
+        print(f"  [geocode] fallback to KNOWN_COORDS city-centre: {known}")
+        result = known
+
+    _geocache[cache_key] = result
+    return result

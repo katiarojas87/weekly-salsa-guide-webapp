@@ -26,7 +26,7 @@ import sys
 import time
 import random
 from datetime import date, timedelta, datetime
-from scrapers.utils import KNOWN_COORDS, geocode, inner_text, parse_dutch_date
+from scrapers.utils import geocode, inner_text, parse_dutch_date
 
 # --- CONFIG ---
 LATINWORLD_URL  = "https://www.latinworld.nl/salsa/agenda/?periode=1"
@@ -48,37 +48,17 @@ NL_DAYS = {4: "Vrijdag", 5: "Zaterdag", 6: "Zondag",
 # Use shared `geocode`, `inner_text`, and `parse_dutch_date` from `scrapers.utils`.
 # Keep source-specific helpers (lat/lng enrichment) below and call into the shared utils.
 
-def lookup_known_coordinates(*parts: str) -> tuple:
-    for part in parts:
-        key = str(part or "").strip().lower()
-        if not key:
-            continue
-        for city_key, coords in KNOWN_COORDS.items():
-            # Word-boundary match — a plain substring check would let e.g.
-            # "olen" falsely match inside "volendam".
-            if re.search(r'\b' + re.escape(city_key) + r'\b', key):
-                return coords
-    return None, None
-
-
 def get_coordinates(city: str, address: str = "", country: str = None) -> tuple:
     """Return (lat, lng) for an event.
 
     Priority:
-    1. City-centre from KNOWN_COORDS — checked via the `city` field directly,
-       not by hoping the city name appears inside `address`. LocationIQ has
-       repeatedly returned wrong-country matches for addresses with no
-       country hint, so a verified city-centre beats a LocationIQ guess.
-    2. Full street address geocoded via LocationIQ (only if city is unknown).
-    3. LocationIQ on the bare city name.
+    1. geocode(address, country) — a precise venue match; validation and
+       the KNOWN_COORDS fallback are handled inside geocode() itself.
+    2. geocode(city, country) as a last resort if address is missing.
     """
-    lat, lng = lookup_known_coordinates(city)
-    if lat is not None and lng is not None:
-        return lat, lng
-
     addr = (address or "").strip()
     if addr:
-        result = geocode(addr, country)
+        result = geocode(addr, country, city=city)
         if result:
             return result[0], result[1]
 

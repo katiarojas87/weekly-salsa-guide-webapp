@@ -12,11 +12,25 @@ import sys
 import time
 import random
 from datetime import date, timedelta, datetime
-from scrapers.utils import KNOWN_COORDS, geocode, inner_text, parse_dutch_date
+from scrapers.utils import geocode, inner_text, parse_dutch_date
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 BASE_URL        = "https://agenda.salsalovers.be"
 TARGET_URL      = f"{BASE_URL}/parties"
+
+ADDRESS_CORRECTIONS = {
+    "straatsburgdork": "straatsburgdok",
+}
+
+
+def fix_address_typos(address: str) -> str:
+    """Fix known typos in scraped addresses before geocoding."""
+    if not address:
+        return address
+    result = address
+    for wrong, correct in ADDRESS_CORRECTIONS.items():
+        result = result.replace(wrong, correct)
+    return result
 
 NL_MONTHS = {
     "januari": 1, "februari": 2, "maart": 3, "april": 4,
@@ -33,41 +47,21 @@ NL_DAYS = {4: "Vrijdag", 5: "Zaterdag", 6: "Zondag",
 # Source-specific geocoding helper remains below for lat/lng enrichment only.
 
 
-def lookup_known_coordinates(*parts: str) -> tuple:
-    for part in parts:
-        key = str(part or "").strip().lower()
-        if not key:
-            continue
-        for city_key, coords in KNOWN_COORDS.items():
-            # Word-boundary match — a plain substring check would let e.g.
-            # "olen" falsely match inside "volendam".
-            if re.search(r'\b' + re.escape(city_key) + r'\b', key):
-                return coords
-    return None, None
-
-
 def get_coordinates(city: str, address: str = "", coords=None) -> tuple:
     """Return (lat, lng) for an event.
 
     Priority:
     1. Explicit coords extracted from the event page HTML.
-    2. City-centre from KNOWN_COORDS — checked via the `city` field directly,
-       not by hoping the city name appears inside `address`. LocationIQ has
-       repeatedly returned wrong-country matches for addresses with no
-       country hint, so a verified city-centre beats a LocationIQ guess.
-    3. Full street address geocoded via LocationIQ (only if city is unknown).
-    4. LocationIQ on the bare city name.
+    2. geocode(address) — a precise venue match; validation and the
+       KNOWN_COORDS fallback are handled inside geocode() itself.
+    3. geocode(city) as a last resort if address is missing.
     """
     if coords:
         return coords[0], coords[1]
 
-    lat, lng = lookup_known_coordinates(city)
-    if lat is not None and lng is not None:
-        return lat, lng
-
     addr = (address or "").strip()
     if addr:
-        result = geocode(addr)
+        result = geocode(addr, city=city)
         if result:
             return result[0], result[1]
 
@@ -404,6 +398,8 @@ def parse_detail(html: str, stub: dict) -> dict:
         coord_m = re.search(r'@(-?\d+\.\d+),(-?\d+\.\d+),\d+z', html)
     if coord_m:
         event['coordinates'] = [float(coord_m.group(1)), float(coord_m.group(2))]
+
+    event['address'] = fix_address_typos(event['address'])
 
     return event
 
