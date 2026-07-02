@@ -83,6 +83,24 @@ def _in_bbox(lat: float, lng: float, country: str) -> bool:
     return lat_min <= lat <= lat_max and lng_min <= lng <= lng_max
 
 
+def _known_city_match(key: str):
+    """Return (lat, lng) from KNOWN_COORDS if a known city name appears as a
+    whole word in `key`, else None."""
+    for city_key, coords in KNOWN_COORDS.items():
+        if re.search(r'\b' + re.escape(city_key) + r'\b', key):
+            return coords
+    return None
+
+
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    from math import radians, sin, cos, sqrt, atan2
+    R = 6371.0
+    dlat = radians(lat2 - lat1)
+    dlng = radians(lng2 - lng1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+
+
 def inner_text(html: str) -> str:
     text = re.sub(r'&nbsp;', ' ', html)
     text = re.sub(r'&amp;', '&', text)
@@ -158,13 +176,11 @@ def geocode(location: str, country: str = None):
         return _geocache[cache_key]
 
     is_address = _looks_like_address(key)
+    known = _known_city_match(key)
 
-    if not is_address:
-        # Fast path for city-only names
-        for city_key, coords in KNOWN_COORDS.items():
-            if re.search(r'\b' + re.escape(city_key) + r'\b', key):
-                _geocache[cache_key] = coords
-                return coords
+    if not is_address and known:
+        _geocache[cache_key] = known
+        return known
 
     # Try LocationIQ — known country first (if any), then the other, then bare
     if _LOCATIONIQ_KEY:
@@ -182,17 +198,23 @@ def geocode(location: str, country: str = None):
                         lat, lng = float(data[0]["lat"]), float(data[0]["lon"])
                         if query_country and not _in_bbox(lat, lng, query_country):
                             continue
+                        # Reject address-level matches that land far from the
+                        # known city centre — a low-confidence LocationIQ hit
+                        # (e.g. a street address geocoded to the wrong town)
+                        # is worse than falling back to the city centre.
+                        if known and _haversine_km(lat, lng, known[0], known[1]) > 15:
+                            continue
                         _geocache[cache_key] = (lat, lng)
                         return (lat, lng)
             except Exception:
                 pass
 
-    # Last resort for full addresses: fall back to city-centre from KNOWN_COORDS
-    if is_address:
-        for city_key, coords in KNOWN_COORDS.items():
-            if re.search(r'\b' + re.escape(city_key) + r'\b', key):
-                _geocache[cache_key] = coords
-                return coords
+    # Last resort: fall back to the known city-centre, if any (covers both a
+    # full address whose LocationIQ match was rejected above, and a city name
+    # that isn't in KNOWN_COORDS but LocationIQ also failed to resolve).
+    if known:
+        _geocache[cache_key] = known
+        return known
 
     _geocache[cache_key] = None
     return None
