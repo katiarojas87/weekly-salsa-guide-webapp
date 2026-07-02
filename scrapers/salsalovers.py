@@ -29,7 +29,11 @@ def fix_address_typos(address: str) -> str:
         return address
     result = address
     for wrong, correct in ADDRESS_CORRECTIONS.items():
-        result = result.replace(wrong, correct)
+        pattern = re.compile(re.escape(wrong), re.IGNORECASE)
+        def _replace(m, correct=correct):
+            matched = m.group(0)
+            return correct.capitalize() if matched[:1].isupper() else correct
+        result = pattern.sub(_replace, result)
     return result
 
 NL_MONTHS = {
