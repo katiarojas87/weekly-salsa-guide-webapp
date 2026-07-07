@@ -48,15 +48,23 @@ def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 @app.on_event("startup")
 def startup():
     init_db(None)
-    logger.info("DB initialised. API ready.")
+    events_count = len(get_events(None))
+    if events_count == 0:
+        logger.warning("DATABASE EMPTY ON STARTUP — run scrape_and_push.py to repopulate")
+    logger.info("DB initialised. API ready. events_count=%d", events_count)
 
 
 # ── HEALTH ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
-    return {"status": "ok", "service": "Salsa Events API", "version": "3.0"}
+    return {
+        "status":       "ok",
+        "service":      "Salsa Events API",
+        "version":      "3.0",
+        "events_count": len(get_events(None)),
+    }
 
 
 # ── PUSH EVENTS (called by local scraper) ─────────────────────────────────────
